@@ -290,7 +290,10 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry })
             strokeWidth="0.6"
           />
 
-          {/* Countries */}
+          {/* Countries — each path is wrapped in a <g role="button"> with
+             an accessible name + a <title> child. Screen readers read the
+             country name (and visited state) instead of "image image image",
+             and hover tooltips surface the name on desktop. */}
           {countries.map((country) => {
             const d = projectionData.path({
               type: 'Feature',
@@ -300,21 +303,30 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry })
             if (!d) return null
             const isVisited = visited.has(country.iso3)
             const isSelected = country.iso3 === selectedIso3
+            const label = isVisited
+              ? `${country.displayName} — visited`
+              : country.displayName
             return (
-              <path
+              <g
                 key={country.iso3}
-                d={d}
-                className={
-                  'cb-country' +
-                  (isVisited ? ' cb-country--visited' : '') +
-                  (isSelected ? ' cb-country--selected' : '')
-                }
-                vectorEffect="non-scaling-stroke"
+                role="button"
+                aria-label={label}
                 onClick={() => {
                   if (dragRef.current.moved) return
                   onTapCountry(country)
                 }}
-              />
+              >
+                <title>{label}</title>
+                <path
+                  d={d}
+                  className={
+                    'cb-country' +
+                    (isVisited ? ' cb-country--visited' : '') +
+                    (isSelected ? ' cb-country--selected' : '')
+                  }
+                  vectorEffect="non-scaling-stroke"
+                />
+              </g>
             )
           })}
 
