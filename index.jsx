@@ -153,7 +153,14 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry })
   }, [animateTo, countries, focusRequest, ready])
 
   // Idle spin — runs every frame except during user drag or focus pan.
+  // Honors prefers-reduced-motion: vestibular users see a still globe by
+  // default, and the focus-pan animation still works because that's
+  // user-initiated.
   useEffect(() => {
+    const reduceMotion =
+      typeof window !== 'undefined' &&
+      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    if (reduceMotion) return
     cancelAnimationFrame(idleRef.current)
     const loop = () => {
       if (!dragRef.current.active) {
@@ -360,7 +367,6 @@ function BottomSheet({
   onSelect,
   onToggleVisited,
 }) {
-  const wrapRef = useRef(null)
   const dragRef = useRef({ active: false, startY: 0, startFrac: SHEET_MID })
   const [frac, setFrac] = useState(SHEET_MID)
 
@@ -402,7 +408,6 @@ function BottomSheet({
 
   return (
     <div
-      ref={wrapRef}
       className="cb-sheet"
       style={{ height: `${frac * 100}vh` }}
     >
@@ -442,6 +447,10 @@ function BottomSheet({
           value={query}
           onChange={(event) => onQueryChange(event.target.value)}
           placeholder="Search countries"
+          aria-label="Search countries"
+          autoCorrect="off"
+          autoCapitalize="off"
+          spellCheck={false}
         />
       </div>
 
@@ -930,7 +939,11 @@ export default function CountriesBeen({ appId, token }) {
         </div>
       </header>
 
-      {error ? <div className="cb-error">{error}</div> : null}
+      {error ? (
+        <div className="cb-error" role="alert" aria-live="polite">
+          {error}
+        </div>
+      ) : null}
 
       <div className="cb-globe-shell">
         {loading ? (
