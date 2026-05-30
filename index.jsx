@@ -613,6 +613,11 @@ export default function CountriesBeen({ appId, token }) {
     typeof navigator !== 'undefined' ? navigator.onLine !== false : true,
   )
   const [pending, setPending] = useState(0)
+  // Distinguishes "fetched empty list" from "couldn't fetch at all". When
+  // offline, storage.get returns null; the boot path flips this flag so we
+  // can render an "offline — using last-known state" banner instead of
+  // pretending the world has zero countries.
+  const [offlineBoot, setOfflineBoot] = useState(false)
 
   // ----- boot ----------------------------------------------------------
   useEffect(() => {
@@ -625,9 +630,20 @@ export default function CountriesBeen({ appId, token }) {
           storage.get('visited.json'),
         ])
         if (!active) return
-        const list = Array.isArray(countriesData) ? countriesData : []
-        setCountries(list)
-        setVisited(new Set(Array.isArray(visitedData) ? visitedData : []))
+        const countriesOk = Array.isArray(countriesData)
+        const visitedOk = Array.isArray(visitedData)
+        if (countriesOk) setCountries(countriesData)
+        if (visitedOk) setVisited(new Set(visitedData))
+        // storage.get returns null offline. Treat a null on the bundled
+        // GeoJSON as "we're offline and have nothing cached" — show a
+        // banner instead of a confident "0 / …" that reads as fact.
+        if (
+          !countriesOk &&
+          typeof navigator !== 'undefined' &&
+          navigator.onLine === false
+        ) {
+          setOfflineBoot(true)
+        }
         setError('')
       } catch (err) {
         // eslint-disable-next-line no-console
@@ -830,6 +846,13 @@ export default function CountriesBeen({ appId, token }) {
           background: var(--cb-surface);
           border: 1px solid var(--cb-border);
           font-variant-numeric: tabular-nums;
+          transition: opacity 200ms ease;
+        }
+        .cb-counter--faded {
+          /* When we boot offline with no cached GeoJSON, the totals are
+             unknown — fade the counter so the user doesn't read a
+             confidently-stated "0 / …" as fact. */
+          opacity: 0.55;
         }
         .cb-counter strong {
           font-size: 18px;
@@ -931,6 +954,16 @@ export default function CountriesBeen({ appId, token }) {
           color: var(--text);
           border: 1px solid var(--cb-border);
           font-size: 13px;
+        }
+        .cb-banner {
+          margin: 0 18px 8px;
+          padding: 8px 14px;
+          border-radius: 12px;
+          background: color-mix(in srgb, var(--surface) 70%, transparent);
+          border: 1px solid var(--cb-border);
+          color: var(--muted);
+          font-size: 12px;
+          line-height: 1.4;
         }
 
         .cb-sheet {
@@ -1098,12 +1131,22 @@ export default function CountriesBeen({ appId, token }) {
         </h1>
         <div className="cb-header-meta">
           <SyncPill online={online} pending={pending} hasRuntime={storage.hasRuntime} />
-          <div className="cb-counter" aria-label={`${visitedCount} of ${totalCount} countries visited`}>
+          <div
+            className={'cb-counter' + (offlineBoot ? ' cb-counter--faded' : '')}
+            aria-label={`${visitedCount} of ${totalCount} countries visited`}
+          >
             <strong>{visitedCount}</strong>
             <span>/ {totalCount || '…'}</span>
           </div>
         </div>
       </header>
+
+      {offlineBoot ? (
+        <div className="cb-banner" role="status">
+          You're offline — showing your last visited list. The globe and full country
+          list come back when you're online again.
+        </div>
+      ) : null}
 
       {error ? (
         <div className="cb-error" role="alert" aria-live="polite">
