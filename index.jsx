@@ -423,14 +423,23 @@ function BottomSheet({
             const isVisited = visited.has(country.iso3)
             const isSelected = country.iso3 === selectedIso3
             return (
-              <button
+              <div
                 key={country.iso3}
+                role="button"
+                tabIndex={0}
+                aria-label={`Show ${country.displayName} on the globe`}
                 className={
                   'cb-row' +
                   (isVisited ? ' cb-row--visited' : '') +
                   (isSelected ? ' cb-row--selected' : '')
                 }
                 onClick={() => onSelect(country)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault()
+                    onSelect(country)
+                  }
+                }}
               >
                 <span className="cb-row-flag" aria-hidden="true">
                   {country.flag || '🏳️'}
@@ -442,26 +451,21 @@ function BottomSheet({
                     {country.subregion ? ` · ${country.subregion}` : ''}
                   </small>
                 </span>
-                <span
+                <button
+                  type="button"
                   className={'cb-row-pill' + (isVisited ? ' is-on' : '')}
                   onClick={(event) => {
                     event.stopPropagation()
                     onToggleVisited(country)
                   }}
-                  role="checkbox"
-                  aria-checked={isVisited}
-                  tabIndex={0}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault()
-                      event.stopPropagation()
-                      onToggleVisited(country)
-                    }
-                  }}
+                  aria-pressed={isVisited}
+                  aria-label={isVisited
+                    ? `Mark ${country.displayName} as not visited`
+                    : `Mark ${country.displayName} as visited`}
                 >
                   {isVisited ? 'Been' : 'Mark'}
-                </span>
-              </button>
+                </button>
+              </div>
             )
           })
         )}
