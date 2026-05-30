@@ -571,29 +571,30 @@ export default function CountriesBeen({ appId, token }) {
     setFocusRequest({ iso3: country.iso3, duration, stamp: Date.now() })
   }, [])
 
-  const persistVisited = useCallback(
-    async (nextSet) => {
-      setVisited(new Set(nextSet))
-      try {
-        await storage.set('visited.json', Array.from(nextSet))
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.error('Countries Been: save failed', err)
-        setError('Could not save your visited countries just now.')
-      }
-    },
-    [storage],
-  )
-
+  // Optimistic update with rollback. We flip the local Set immediately so
+  // the tap feels instant, then revert if storage.set rejects — otherwise
+  // the user sees a country glow that the next reload silently undoes.
   const toggleVisited = useCallback(
     (country) => {
       if (!country) return
-      const next = new Set(visited)
+      const previous = visited
+      const next = new Set(previous)
       if (next.has(country.iso3)) next.delete(country.iso3)
       else next.add(country.iso3)
-      persistVisited(next)
+      setVisited(next)
+      setError('')
+      storage.set('visited.json', Array.from(next)).catch((err) => {
+        // eslint-disable-next-line no-console
+        console.error('Countries Been: save failed', err)
+        // Rollback to the pre-tap Set so on-screen state matches what's
+        // actually persisted.
+        setVisited(previous)
+        setError(
+          `Could not save ${country.displayName} just now — try again in a moment.`,
+        )
+      })
     },
-    [persistVisited, visited],
+    [storage, visited],
   )
 
   // Tap on globe — pan to face the country AND toggle in one motion. This
