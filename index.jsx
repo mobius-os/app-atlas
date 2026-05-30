@@ -871,9 +871,14 @@ export default function CountriesBeen({ appId, token }) {
           color: var(--muted);
         }
         .cb-row-pill {
-          padding: 6px 12px;
+          /* iOS HIG says 44×44pt minimum. The pill is still visually a pill
+             (smaller text, rounded ends); the height comes from min-height
+             and the width from min-width + symmetric padding. */
+          min-width: 64px;
+          min-height: 44px;
+          padding: 0 14px;
           border-radius: 999px;
-          font-size: 12px;
+          font-size: 13px;
           font-weight: 600;
           letter-spacing: 0.02em;
           background: color-mix(in srgb, var(--surface2) 90%, transparent);
