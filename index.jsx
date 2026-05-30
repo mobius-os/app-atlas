@@ -232,7 +232,7 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry })
   return (
     <div ref={containerRef} className="cb-globe-canvas">
       {!projectionData ? (
-        <div className="cb-globe-loading">Loading globe...</div>
+        <div className="cb-globe-loading">Loading the world…</div>
       ) : (
         <svg
           className="cb-globe-svg"
