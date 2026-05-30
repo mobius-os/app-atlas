@@ -34,7 +34,20 @@ function makeStorage({ appId, token }) {
     return { synced: true }
   }
 
-  return { get, set }
+  // pendingCount surfaces the runtime outbox depth. Returns 0 in dev/fallback
+  // mode (no runtime → no outbox → writes always go straight to the server).
+  async function pendingCount() {
+    if (native?.pendingCount) {
+      try {
+        return await native.pendingCount()
+      } catch {
+        return 0
+      }
+    }
+    return 0
+  }
+
+  return { get, set, pendingCount, hasRuntime: !!native }
 }
 
 // --------------------------------------------------------------------------
@@ -535,6 +548,51 @@ function BottomSheet({
 }
 
 // --------------------------------------------------------------------------
+// Sync pill — surfaces outbox depth + offline state next to the counter.
+// --------------------------------------------------------------------------
+// Three observable states, in priority order:
+//   pending > 0  → "Offline · N pending" / "Saving · N pending"
+//   offline      → "Offline"
+//   online + 0   → null (the steady state hides the pill so we don't
+//                  clutter the header with "Saved" forever)
+// hasRuntime=false means the runtime didn't load (dev/fallback) — writes
+// go direct to the server, so there's no outbox to surface. Hide the pill
+// in that mode rather than lie about a queue that doesn't exist.
+function SyncPill({ online, pending, hasRuntime }) {
+  if (!hasRuntime) return null
+  if (pending > 0) {
+    const label = online
+      ? `Saving · ${pending} pending`
+      : `Offline · ${pending} pending`
+    return (
+      <span
+        className={'cb-pill cb-pill--pending' + (online ? '' : ' cb-pill--offline')}
+        role="status"
+        aria-live="polite"
+        title="Your changes are saved locally and will sync when you're back online."
+      >
+        <span className="cb-pill-dot" aria-hidden="true" />
+        {label}
+      </span>
+    )
+  }
+  if (!online) {
+    return (
+      <span
+        className="cb-pill cb-pill--offline"
+        role="status"
+        aria-live="polite"
+        title="You're offline — taps will sync when you're back online."
+      >
+        <span className="cb-pill-dot" aria-hidden="true" />
+        Offline
+      </span>
+    )
+  }
+  return null
+}
+
+// --------------------------------------------------------------------------
 // App root.
 // --------------------------------------------------------------------------
 export default function CountriesBeen({ appId, token }) {
@@ -547,6 +605,14 @@ export default function CountriesBeen({ appId, token }) {
   const [focusRequest, setFocusRequest] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  // Track online status + outbox depth so the user can see whether their
+  // last tap actually reached the server. We poll pendingCount() lazily —
+  // once after every set/remove and on a slow 10s interval — rather than
+  // subscribing to a runtime event the platform doesn't expose.
+  const [online, setOnline] = useState(
+    typeof navigator !== 'undefined' ? navigator.onLine !== false : true,
+  )
+  const [pending, setPending] = useState(0)
 
   // ----- boot ----------------------------------------------------------
   useEffect(() => {
@@ -574,6 +640,28 @@ export default function CountriesBeen({ appId, token }) {
     boot()
     return () => {
       active = false
+    }
+  }, [storage])
+
+  // Online/offline tracking. We listen to the browser events directly
+  // (the runtime doesn't proxy them) and refresh pending count on each
+  // transition so the pill updates immediately when the outbox drains.
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    const refresh = () => {
+      setOnline(navigator.onLine !== false)
+      storage.pendingCount().then(setPending).catch(() => {})
+    }
+    refresh()
+    window.addEventListener('online', refresh)
+    window.addEventListener('offline', refresh)
+    // Slow poll catches drains that happen without a window event (the
+    // runtime flushes on focus/visibility too, which don't fire 'online').
+    const id = setInterval(refresh, 10000)
+    return () => {
+      window.removeEventListener('online', refresh)
+      window.removeEventListener('offline', refresh)
+      clearInterval(id)
     }
   }, [storage])
 
@@ -616,6 +704,10 @@ export default function CountriesBeen({ appId, token }) {
   // Optimistic update with rollback. We flip the local Set immediately so
   // the tap feels instant, then revert if storage.set rejects — otherwise
   // the user sees a country glow that the next reload silently undoes.
+  //
+  // Offline path: storage.set returns {queued:true} (not a rejection), so
+  // the rollback only fires on real server errors. A queued write keeps
+  // the optimistic state and bumps the pending pill — exactly what we want.
   const toggleVisited = useCallback(
     (country) => {
       if (!country) return
@@ -625,16 +717,23 @@ export default function CountriesBeen({ appId, token }) {
       else next.add(country.iso3)
       setVisited(next)
       setError('')
-      storage.set('visited.json', Array.from(next)).catch((err) => {
-        // eslint-disable-next-line no-console
-        console.error('Countries Been: save failed', err)
-        // Rollback to the pre-tap Set so on-screen state matches what's
-        // actually persisted.
-        setVisited(previous)
-        setError(
-          `Could not save ${country.displayName} just now — try again in a moment.`,
-        )
-      })
+      storage
+        .set('visited.json', Array.from(next))
+        .then(() => {
+          // Refresh outbox depth — queued writes bump it, synced writes
+          // leave it unchanged (or drain it during a flush we missed).
+          storage.pendingCount().then(setPending).catch(() => {})
+        })
+        .catch((err) => {
+          // eslint-disable-next-line no-console
+          console.error('Countries Been: save failed', err)
+          // Rollback to the pre-tap Set so on-screen state matches what's
+          // actually persisted.
+          setVisited(previous)
+          setError(
+            `Could not save ${country.displayName} just now — try again in a moment.`,
+          )
+        })
     },
     [storage, visited],
   )
@@ -717,6 +816,11 @@ export default function CountriesBeen({ appId, token }) {
           font-weight: 500;
           margin-bottom: 2px;
         }
+        .cb-header-meta {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+        }
         .cb-counter {
           display: inline-flex;
           align-items: baseline;
@@ -734,6 +838,36 @@ export default function CountriesBeen({ appId, token }) {
         .cb-counter span {
           color: var(--muted);
           font-size: 13px;
+        }
+        /* Sync pill — sits next to the counter; hidden when synced + online
+           (the common case). When pending > 0 or offline, the pill softly
+           announces what state the user's writes are in. */
+        .cb-pill {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 5px 10px;
+          border-radius: 999px;
+          font-size: 11px;
+          font-weight: 600;
+          letter-spacing: 0.04em;
+          border: 1px solid var(--cb-border);
+          background: var(--cb-surface);
+          color: var(--muted);
+          font-variant-numeric: tabular-nums;
+        }
+        .cb-pill-dot {
+          width: 7px;
+          height: 7px;
+          border-radius: 50%;
+          background: var(--muted);
+        }
+        .cb-pill--pending .cb-pill-dot {
+          background: var(--accent);
+          box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+        }
+        .cb-pill--offline .cb-pill-dot {
+          background: color-mix(in srgb, var(--text) 50%, transparent);
         }
 
         .cb-globe-shell {
@@ -962,9 +1096,12 @@ export default function CountriesBeen({ appId, token }) {
             ? '1 down, the rest of the world to go.'
             : `${visitedCount} stamps on the map.`}
         </h1>
-        <div className="cb-counter" aria-label={`${visitedCount} of ${totalCount} countries visited`}>
-          <strong>{visitedCount}</strong>
-          <span>/ {totalCount || '…'}</span>
+        <div className="cb-header-meta">
+          <SyncPill online={online} pending={pending} hasRuntime={storage.hasRuntime} />
+          <div className="cb-counter" aria-label={`${visitedCount} of ${totalCount} countries visited`}>
+            <strong>{visitedCount}</strong>
+            <span>/ {totalCount || '…'}</span>
+          </div>
         </div>
       </header>
 
