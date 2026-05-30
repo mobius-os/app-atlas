@@ -69,24 +69,41 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry })
   const [size, setSize] = useState({ width: 0, height: 0 })
   const [rotation, setRotation] = useState(INITIAL_ROTATION.slice())
   const [ready, setReady] = useState(false)
+  // depFailed sticks once the d3-geo import gives up so the spinner doesn't
+  // hang forever on a cold offline reload. The SW caches esm.sh cache-first,
+  // so this should only ever trip the very first time an offline user opens
+  // the app — after one online load, the bundle lives in the SW cache.
+  const [depFailed, setDepFailed] = useState(false)
 
   // d3-geo lives at runtime — declared in manifest.runtime.esm_deps so the
   // install UI warns the user. Bundle suffix flattens the dep graph into a
   // single ES module so esm.sh doesn't ship a waterfall of small chunks.
+  // A 5s timeout races the import so an offline cold-start can't hang on the
+  // fetch indefinitely; the timeout-vs-error distinction doesn't matter to
+  // the user, so both paths lead to the same "load when online again" copy.
   useEffect(() => {
     let active = true
-    import('https://esm.sh/d3-geo@3?bundle')
+    const timeoutMs = 5000
+    let timeoutId = 0
+    const timeoutPromise = new Promise((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error('d3-geo load timed out')), timeoutMs)
+    })
+    Promise.race([import('https://esm.sh/d3-geo@3?bundle'), timeoutPromise])
       .then((mod) => {
+        clearTimeout(timeoutId)
         if (!active) return
         d3Ref.current = mod
         setReady(true)
       })
       .catch((err) => {
+        clearTimeout(timeoutId)
         // eslint-disable-next-line no-console
         console.error('d3-geo failed to load', err)
+        if (active) setDepFailed(true)
       })
     return () => {
       active = false
+      clearTimeout(timeoutId)
     }
   }, [])
 
@@ -238,7 +255,11 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry })
 
   return (
     <div ref={containerRef} className="cb-globe-canvas">
-      {!projectionData ? (
+      {depFailed ? (
+        <div className="cb-globe-loading cb-globe-loading--offline" role="status">
+          Globe needs one online load — pull to refresh when you're back online.
+        </div>
+      ) : !projectionData ? (
         <div className="cb-globe-loading">Loading the world…</div>
       ) : (
         <svg
@@ -736,6 +757,14 @@ export default function CountriesBeen({ appId, token }) {
           place-items: center;
           color: var(--muted);
           font-size: 14px;
+          text-align: center;
+          padding: 0 24px;
+        }
+        .cb-globe-loading--offline {
+          /* Sticks slightly above center so it doesn't overlap the bottom
+             sheet's grip on short viewports. */
+          align-items: start;
+          padding-top: 28%;
         }
         .cb-country {
           fill: color-mix(in srgb, var(--text) 18%, transparent);
