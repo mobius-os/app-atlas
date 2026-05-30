@@ -254,9 +254,9 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry })
               <stop offset="100%" stopColor="var(--cb-ocean-3)" />
             </radialGradient>
             <radialGradient id="cb-shine" cx="35%" cy="28%">
-              <stop offset="0%" stopColor="rgba(255,255,255,0.55)" />
-              <stop offset="45%" stopColor="rgba(255,255,255,0.06)" />
-              <stop offset="100%" stopColor="rgba(255,255,255,0)" />
+              <stop offset="0%" stopColor="var(--cb-shine-1)" />
+              <stop offset="45%" stopColor="var(--cb-shine-2)" />
+              <stop offset="100%" stopColor="var(--cb-shine-3)" />
             </radialGradient>
             <filter id="cb-glow" x="-50%" y="-50%" width="200%" height="200%">
               <feGaussianBlur stdDeviation="16" />
@@ -273,11 +273,12 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry })
             filter="url(#cb-glow)"
           />
 
-          {/* Ocean sphere */}
+          {/* Ocean sphere — stroke derives from --text so the rim stays
+             visible on light themes (where pure-white would vanish). */}
           <path
             d={projectionData.path({ type: 'Sphere' })}
             fill="url(#cb-ocean)"
-            stroke="rgba(255,255,255,0.18)"
+            stroke="color-mix(in srgb, var(--text) 22%, transparent)"
             strokeWidth="1"
           />
 
@@ -285,7 +286,7 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry })
           <path
             d={projectionData.path(projectionData.graticule)}
             fill="none"
-            stroke="rgba(255,255,255,0.10)"
+            stroke="color-mix(in srgb, var(--text) 14%, transparent)"
             strokeWidth="0.6"
           />
 
@@ -606,9 +607,19 @@ export default function CountriesBeen({ appId, token }) {
     <div className="cb-app">
       <style>{`
         .cb-app {
-          --cb-ocean-1: color-mix(in srgb, var(--accent) 22%, #0a1730 78%);
-          --cb-ocean-2: color-mix(in srgb, var(--accent) 12%, #06122a 88%);
-          --cb-ocean-3: #050a18;
+          /* Ocean palette is theme-derived so the globe reads as a globe in
+             every theme. The base is var(--bg) shaded toward var(--text)
+             (so it darkens against light bgs and lifts against dark bgs);
+             accent provides the cool tint. */
+          --cb-ocean-1: color-mix(in srgb, var(--accent) 28%, color-mix(in srgb, var(--bg) 70%, var(--text) 30%));
+          --cb-ocean-2: color-mix(in srgb, var(--accent) 14%, color-mix(in srgb, var(--bg) 55%, var(--text) 45%));
+          --cb-ocean-3: color-mix(in srgb, var(--bg) 40%, var(--text) 60%);
+          /* Specular shine — a soft white highlight in dark themes, a faint
+             accent-tinted halo in light ones (where pure white disappears
+             into the page). */
+          --cb-shine-1: color-mix(in srgb, white 55%, transparent);
+          --cb-shine-2: color-mix(in srgb, white 6%, transparent);
+          --cb-shine-3: transparent;
           --cb-surface: color-mix(in srgb, var(--surface) 82%, transparent);
           --cb-surface-strong: color-mix(in srgb, var(--surface2) 92%, transparent);
           --cb-border: var(--border);
