@@ -407,7 +407,24 @@ function BottomSheet({
       </div>
 
       <div className="cb-sheet-search">
-        <span aria-hidden="true">⌕</span>
+        {/* Inline SVG, not U+2315 — the codepoint renders as tofu on some
+            Android WebViews even when the system claims symbol coverage. */}
+        <svg
+          className="cb-sheet-search-icon"
+          width="16"
+          height="16"
+          viewBox="0 0 16 16"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+          focusable="false"
+        >
+          <circle cx="7" cy="7" r="4.5" />
+          <line x1="10.5" y1="10.5" x2="13.5" y2="13.5" />
+        </svg>
         <input
           type="search"
           value={query}
@@ -768,6 +785,11 @@ export default function CountriesBeen({ appId, token }) {
           border-radius: 14px;
           background: var(--cb-surface);
           border: 1px solid var(--cb-border);
+          color: var(--muted);
+        }
+        .cb-sheet-search-icon {
+          flex-shrink: 0;
+          display: block;
           color: var(--muted);
         }
         .cb-sheet-search input {
