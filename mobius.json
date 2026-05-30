@@ -1,0 +1,22 @@
+{
+  "id": "countries",
+  "name": "Countries Been",
+  "version": "1.0.0",
+  "description": "Tap a 3D globe to mark the countries you've visited. See them glow on the map, in a list, and as a count.",
+  "author": "mobius-os",
+  "license": "MIT",
+  "homepage": "https://github.com/mobius-os/app-countries",
+  "entry": "index.jsx",
+  "permissions": {
+    "cross_app_access": "none",
+    "share_with_apps": "none"
+  },
+  "storage_seeds": {
+    "visited.json": [],
+    "countries.geo.json": "countries.geo.json"
+  },
+  "runtime": {
+    "imports": ["react", "react-dom"],
+    "esm_deps": ["d3-geo"]
+  }
+}
