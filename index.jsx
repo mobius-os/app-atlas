@@ -1,43 +1,72 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 // --------------------------------------------------------------------------
-// Storage shim — offline runtime first, direct fetch fallback.
+// Storage shim — probe runtime on every call, fall back to fetch on miss.
 // --------------------------------------------------------------------------
-// The Möbius shell exposes window.mobius.storage when the offline-runtime
-// feature lands; until then this app talks to /api/storage directly with
-// the bearer token the bootloader passes as a prop. Same call signature
-// both ways so the call sites never branch.
+// The Möbius offline runtime exposes window.mobius.storage. It can be
+// injected AFTER the app boots (the shell installs it post-mount on some
+// paths), so caching `native` at construction time wedges every later call
+// into the direct-fetch path even when the runtime is alive. Other apps
+// (app-gym, notes, habits) all probe at call time — we follow that pattern.
+//
+// Each method also falls back to fetch when the runtime is present but
+// throws — a single bad runtime call shouldn't poison the rest of the
+// session.
 function makeStorage({ appId, token }) {
-  const native = typeof window !== 'undefined' ? window.mobius?.storage : null
+  const auth = { Authorization: `Bearer ${token}` }
+  const base = `/api/storage/apps/${appId}`
+
+  const probe = () =>
+    (typeof window !== 'undefined' && window.mobius?.storage) || null
 
   async function get(path) {
-    if (native) return native.get(path)
-    const r = await fetch(`/api/storage/apps/${appId}/${path}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-    if (r.status === 404) return null
-    if (!r.ok) throw new Error(`storage get ${path}: ${r.status}`)
-    return r.json()
+    const native = probe()
+    if (native && typeof native.get === 'function') {
+      try {
+        return await native.get(path)
+      } catch {
+        // fall through to fetch — better a stale-but-real read than null
+      }
+    }
+    try {
+      const r = await fetch(`${base}/${path}`, { headers: auth })
+      if (r.status === 404) return null
+      if (!r.ok) return null
+      const text = await r.text()
+      if (!text) return null
+      try {
+        return JSON.parse(text)
+      } catch {
+        return null
+      }
+    } catch {
+      return null
+    }
   }
 
   async function set(path, data) {
-    if (native) return native.set(path, data)
-    const r = await fetch(`/api/storage/apps/${appId}/${path}`, {
+    const native = probe()
+    if (native && typeof native.set === 'function') {
+      try {
+        return await native.set(path, data)
+      } catch {
+        // fall through to direct PUT
+      }
+    }
+    const r = await fetch(`${base}/${path}`, {
       method: 'PUT',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
+      headers: { ...auth, 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     })
     if (!r.ok) throw new Error(`storage set ${path}: ${r.status}`)
     return { synced: true }
   }
 
-  // pendingCount surfaces the runtime outbox depth. Returns 0 in dev/fallback
-  // mode (no runtime → no outbox → writes always go straight to the server).
+  // pendingCount surfaces the runtime outbox depth. Returns 0 when there
+  // is no runtime (no outbox to surface).
   async function pendingCount() {
-    if (native?.pendingCount) {
+    const native = probe()
+    if (native && typeof native.pendingCount === 'function') {
       try {
         return await native.pendingCount()
       } catch {
@@ -47,7 +76,13 @@ function makeStorage({ appId, token }) {
     return 0
   }
 
-  return { get, set, pendingCount, hasRuntime: !!native }
+  // hasRuntime is a *probe*, not a cached boolean — readers call it when
+  // they need a fresh answer (the SyncPill uses it on every render).
+  function hasRuntime() {
+    return !!probe()
+  }
+
+  return { get, set, pendingCount, hasRuntime }
 }
 
 // --------------------------------------------------------------------------
@@ -1435,7 +1470,7 @@ export default function Visited({ appId, token }) {
             : `${visitedCount} stamps on the map.`}
         </h1>
         <div className="cb-header-meta">
-          <SyncPill online={online} pending={pending} hasRuntime={storage.hasRuntime} />
+          <SyncPill online={online} pending={pending} hasRuntime={storage.hasRuntime()} />
           <div
             className={'cb-counter' + (offlineBoot ? ' cb-counter--faded' : '')}
             aria-label={`${visitedCount} of ${totalCount} countries visited`}
