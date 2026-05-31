@@ -162,7 +162,15 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry })
           0,
         ]
         setRotationBoth(next)
-        if (t < 1) animationRef.current = requestAnimationFrame(step)
+        if (t < 1) {
+          animationRef.current = requestAnimationFrame(step)
+        } else {
+          // Clear the rAF id on completion. The idle-spin loop reads
+          // animationRef.current === 0 as "no focus-pan running"; leaving
+          // the last frame's id in place permanently freezes the idle spin
+          // after the first pan.
+          animationRef.current = 0
+        }
       }
       animationRef.current = requestAnimationFrame(step)
     },
