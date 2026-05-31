@@ -23,7 +23,7 @@ Möbius will fetch the manifest, show you the bundled GeoJSON and `d3-geo` runti
 
 ## What it does
 
-- A draggable orthographic globe is the centerpiece. Spin it with a finger; let go and it eases into a slow idle rotation. Tap any country to toggle it visited (it glows accent).
+- A draggable orthographic globe is the centerpiece. Spin it with a finger; let go and it eases into a slow idle rotation. Pinch to zoom (or scroll/`+`/`-` on desktop) to get in close. Tap any country to toggle it visited (it glows accent).
 - A bottom sheet lists every country with a search box. Tap a row and the globe smoothly pans to face that country. Visited countries float to the top of the list.
 - The header keeps a running count — e.g. `47 / 195` — so the trip across the planet feels like a single number creeping up.
 - Drag the sheet handle up to expand the list (80% of the screen), down to collapse it (30%) and give the globe more room.
@@ -36,7 +36,7 @@ There is nothing to configure. Your visited list lives in app storage at `visite
 
 The globe is rendered as an SVG with [`d3-geo`](https://github.com/d3/d3-geo)'s orthographic projection. Country geometry comes from a public-domain Natural Earth derivative (the [`datasets/geo-countries`](https://github.com/datasets/geo-countries) bundle), trimmed to ~270 KB and seeded into the app's storage on install.
 
-Pointer drag rotates the projection in real time. When the user lifts off, an `requestAnimationFrame` loop nudges the longitude forward a fraction of a degree per frame for a slow idle spin. Tapping a country runs a point-in-polygon test against the projected paths and toggles the country in a `Set`; saves go through `window.mobius.storage` when the offline runtime is present, falling back to `fetch('/api/storage/apps/<id>/visited.json')` otherwise — so the app works on every Möbius version, and picks up the offline cache when the sibling feature ships.
+Pointer drag rotates the projection in real time. When the user lifts off, an `requestAnimationFrame` loop nudges the longitude forward a fraction of a degree per frame for a slow idle spin. A second finger turns the gesture into a pinch that scales the projection (wheel/trackpad and `+`/`-` do the same on desktop); zoom is a multiplier on the size-derived base radius, clamped between `MIN_ZOOM` and `MAX_ZOOM` — change those two constants to widen the range. Tapping a country runs a point-in-polygon test against the projected paths and toggles the country in a `Set`; saves go through `window.mobius.storage` when the offline runtime is present, falling back to `fetch('/api/storage/apps/<id>/visited.json')` otherwise — so the app works on every Möbius version, and picks up the offline cache when the sibling feature ships.
 
 Smooth pans to a tapped list-row use the country's centroid (`d3.geoCentroid`) as the rotation target and ease over ~1s with a cubic ease-out.
 

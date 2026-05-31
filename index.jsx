@@ -92,6 +92,14 @@ const soften = (value) => String(value || '').toLowerCase().trim()
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value))
 const cubicOut = (t) => 1 - Math.pow(1 - t, 3)
 
+// Pixel distance between the first two live pointers in a pointer Map. The
+// pinch gesture is driven entirely by how this distance changes, so it
+// lives in one named place rather than inline in the move handler.
+function pinchSpread(pointers) {
+  const [a, b] = [...pointers.values()]
+  return Math.hypot(a.x - b.x, a.y - b.y)
+}
+
 // Initial rotation — Western Europe slightly above the equator. Easier to
 // recognize than 0,0 (which puts the user in the Atlantic).
 const INITIAL_ROTATION = [12, -22, 0]
@@ -100,6 +108,20 @@ const INITIAL_ROTATION = [12, -22, 0]
 // previous 0.035 deg/frame at 60Hz.
 const IDLE_SPIN_DEG_PER_SEC = 2.1
 const PAN_DURATION_MS = 950
+
+// Zoom — a multiplier on the size-derived base radius (1 = the default
+// "fits the canvas" globe). Kept as a multiplier, not an absolute pixel
+// scale, so it survives a resize: the bottom sheet dragging up shrinks the
+// base radius but the user's chosen zoom level rides along unchanged.
+// MIN < 1 lets the user pull back for a fuller sphere; MAX caps the zoom-in
+// before country borders turn to mush. To change the zoom range, edit these
+// two — every gesture (pinch, wheel, +/- buttons, keyboard) clamps to them.
+const MIN_ZOOM = 0.75
+const MAX_ZOOM = 6
+// Each +/- button press (and keyboard +/-) steps the zoom by this factor.
+// 1.4× per step ≈ 5 presses to cross the whole range, which feels like
+// "a few taps" rather than a slow crawl.
+const ZOOM_STEP = 1.4
 
 // localStorage cache keys — the offline runtime caches storage.get reads
 // but cold-reload-without-runtime needs *some* local mirror or the boot
@@ -168,8 +190,21 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry, o
     startRotate: INITIAL_ROTATION.slice(),
   })
   const rotationRef = useRef(INITIAL_ROTATION.slice())
+  // pinchRef holds the in-flight two-finger gesture. While active it owns
+  // the globe: drag-rotate and idle spin both stand down (they check
+  // pinchRef.current.active) so the two gestures never fight over rotation.
+  const pinchRef = useRef({ active: false, startDist: 0, startZoom: 1 })
+  // Live pointer positions keyed by pointerId. A single entry = drag; a
+  // second entry promotes the gesture to a pinch. This is the one place
+  // that knows "how many fingers are down".
+  const pointersRef = useRef(new Map())
+  const zoomRef = useRef(1)
   const [size, setSize] = useState({ width: 0, height: 0 })
   const [rotation, setRotation] = useState(INITIAL_ROTATION.slice())
+  // zoom is a multiplier on the base radius; see MIN_ZOOM/MAX_ZOOM. Held in
+  // both a ref (read synchronously by gesture handlers) and state (drives
+  // the re-render) the same way rotation is — setZoomBoth keeps them in sync.
+  const [zoom, setZoom] = useState(1)
   const [ready, setReady] = useState(false)
   // depFailed used to be sticky for the rest of the session — a single
   // hiccupping import (e.g. SW updating mid-flight) blanked the globe
@@ -245,6 +280,24 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry, o
     setRotation(next)
   }, [])
 
+  // The single owner of "current zoom". Clamps to [MIN_ZOOM, MAX_ZOOM] so no
+  // caller has to remember the bounds, then writes the ref (read by gesture
+  // handlers) and state (drives the projection) together.
+  const setZoomBoth = useCallback((next) => {
+    const clamped = clamp(next, MIN_ZOOM, MAX_ZOOM)
+    zoomRef.current = clamped
+    setZoom(clamped)
+  }, [])
+
+  // Multiply the current zoom by a factor — the shape every input speaks
+  // (pinch ratio, wheel notch, +/- step). Multiplicative so a step feels
+  // the same whether you're zoomed in or out, and so it stays symmetric:
+  // factor f then 1/f returns you exactly where you started.
+  const zoomBy = useCallback(
+    (factor) => setZoomBoth(zoomRef.current * factor),
+    [setZoomBoth],
+  )
+
   const animateTo = useCallback(
     (target, duration = PAN_DURATION_MS) => {
       cancelAnimationFrame(animationRef.current)
@@ -309,7 +362,7 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry, o
       const last = idleLastTickRef.current || now
       const dt = Math.min(100, now - last) / 1000 // cap dt at 100ms to avoid jumps after a tab-switch
       idleLastTickRef.current = now
-      if (!dragRef.current.active) {
+      if (!dragRef.current.active && !pinchRef.current.active) {
         // Skip idle motion while an explicit focus pan is animating so we
         // don't fight it. animationRef.current is the rAF id; zero = idle.
         if (!animationRef.current || animationRef.current === 0) {
@@ -325,13 +378,14 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry, o
 
   useEffect(() => () => cancelAnimationFrame(animationRef.current), [])
 
-  // Re-compute projection on every rotation/size change.
+  // Re-compute projection on every rotation/zoom/size change.
   const projectionData = useMemo(() => {
     if (!ready || !d3Ref.current || !size.width || !size.height) return null
     const d3 = d3Ref.current
-    // Big globe — radius scales to 46% of the smaller dim, leaving a
-    // comfortable margin so even the antipode bulge doesn't clip.
-    const radius = Math.min(size.width, size.height) * 0.46
+    // Base radius — 46% of the smaller dim fits the default globe with a
+    // comfortable margin. zoom (a multiplier) scales it; the radius below is
+    // the *visible* radius, so the halo/sphere geometry tracks the zoom too.
+    const radius = Math.min(size.width, size.height) * 0.46 * zoom
     const projection = d3
       .geoOrthographic()
       .translate([size.width / 2, size.height / 2])
@@ -342,22 +396,67 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry, o
     const path = d3.geoPath(projection)
     const graticule = d3.geoGraticule10()
     return { projection, path, graticule, radius }
-  }, [ready, rotation, size.height, size.width])
+  }, [ready, rotation, zoom, size.height, size.width])
 
-  // ----- pointer drag --------------------------------------------------
+  // ----- pointer drag + pinch-zoom -------------------------------------
+  // One finger rotates; a second finger promotes the gesture to a pinch
+  // that zooms (and suspends rotation). The pointer count in pointersRef is
+  // the single source of truth for which mode we're in.
+
+  // Re-seat the drag baseline at the leftover pointer's current position so
+  // rotation continues from where the finger is — without this, lifting one
+  // finger after a pinch would snap the globe by the accumulated delta.
+  const reseatDrag = (pointer) => {
+    dragRef.current = {
+      active: true,
+      moved: true, // a pinch happened; never treat the lift-off as a tap
+      startX: pointer.x,
+      startY: pointer.y,
+      startRotate: rotationRef.current.slice(),
+    }
+  }
+
   const onPointerDown = (event) => {
     cancelAnimationFrame(animationRef.current)
     animationRef.current = 0
-    dragRef.current = {
-      active: true,
-      moved: false,
-      startX: event.clientX,
-      startY: event.clientY,
-      startRotate: rotationRef.current.slice(),
-    }
+    pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY })
     event.currentTarget.setPointerCapture?.(event.pointerId)
+    if (pointersRef.current.size >= 2) {
+      // Second finger down — enter pinch. Drag stands down (and is flagged
+      // moved so the gesture can't end in a tap); idle spin pauses on
+      // pinchRef.active.
+      dragRef.current.active = false
+      dragRef.current.moved = true
+      pinchRef.current = {
+        active: true,
+        startDist: pinchSpread(pointersRef.current) || 1,
+        startZoom: zoomRef.current,
+      }
+    } else {
+      dragRef.current = {
+        active: true,
+        moved: false,
+        startX: event.clientX,
+        startY: event.clientY,
+        startRotate: rotationRef.current.slice(),
+      }
+    }
   }
+
   const onPointerMove = (event) => {
+    const pointer = pointersRef.current.get(event.pointerId)
+    if (pointer) {
+      pointer.x = event.clientX
+      pointer.y = event.clientY
+    }
+    if (pinchRef.current.active) {
+      // Zoom tracks the spread ratio so the pinch feels anchored to the
+      // fingers: spread the same factor the globe scaled by. setZoomBoth
+      // clamps, so over-pinching past the bounds simply rests at the limit.
+      const spread = pinchSpread(pointersRef.current)
+      setZoomBoth((pinchRef.current.startZoom * spread) / pinchRef.current.startDist)
+      return
+    }
     if (!dragRef.current.active) return
     const dx = event.clientX - dragRef.current.startX
     const dy = event.clientY - dragRef.current.startY
@@ -365,11 +464,31 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry, o
     const [startLng, startLat] = dragRef.current.startRotate
     setRotationBoth([startLng + dx * 0.4, clamp(startLat - dy * 0.4, -85, 85), 0])
   }
+
   const finishDrag = (event) => {
-    dragRef.current.active = false
+    pointersRef.current.delete(event.pointerId)
     if (event?.currentTarget?.hasPointerCapture?.(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
+    if (pinchRef.current.active) {
+      if (pointersRef.current.size >= 2) {
+        // Still pinching with a different pair — re-seat the baseline so the
+        // zoom doesn't jump when the contributing fingers change.
+        pinchRef.current.startDist = pinchSpread(pointersRef.current) || 1
+        pinchRef.current.startZoom = zoomRef.current
+        return
+      }
+      // Dropped out of pinch. If one finger remains, hand control back to
+      // drag-rotate from its current spot; otherwise the gesture is over.
+      pinchRef.current.active = false
+      const [leftover] = [...pointersRef.current.values()]
+      if (leftover) {
+        reseatDrag(leftover)
+        return
+      }
+    }
+    if (pointersRef.current.size > 0) return // other fingers still down
+    dragRef.current.active = false
     // Defer the moved flag so onClick (which fires after pointerup) still
     // sees moved=true and skips the tap when the user was dragging.
     setTimeout(() => {
@@ -387,6 +506,27 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry, o
   // drag finish so we don't get stuck with dragRef.active=true.
   const onLostPointerCapture = (event) => finishDrag(event)
 
+  // Wheel / trackpad zoom on desktop. Exponential in deltaY so each notch is
+  // a constant proportional change (and the clamp behaves the same near both
+  // ends). passive:false isn't available on React's synthetic onWheel, but
+  // touchAction:none on the SVG already stops the page from scrolling under
+  // a trackpad pinch.
+  const onWheel = (event) => {
+    zoomBy(Math.exp(-event.deltaY * 0.0015))
+  }
+
+  // Keyboard zoom — +/- (and =, the unshifted +) when the globe has focus.
+  // Cheap a11y win: zoom without a pointer at all.
+  const onKeyDown = (event) => {
+    if (event.key === '+' || event.key === '=') {
+      event.preventDefault()
+      zoomBy(ZOOM_STEP)
+    } else if (event.key === '-') {
+      event.preventDefault()
+      zoomBy(1 / ZOOM_STEP)
+    }
+  }
+
   return (
     <div ref={containerRef} className="cb-globe-canvas">
       {depFailed ? (
@@ -399,12 +539,16 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry, o
         <svg
           className="cb-globe-svg"
           viewBox={`0 0 ${size.width} ${size.height}`}
+          tabIndex={0}
+          aria-label="Globe — drag to spin, pinch or +/- to zoom"
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onPointerCancel={onPointerCancel}
           onPointerLeave={onPointerLeave}
           onLostPointerCapture={onLostPointerCapture}
+          onWheel={onWheel}
+          onKeyDown={onKeyDown}
           style={{
             cursor: dragRef.current.active ? 'grabbing' : 'grab',
             touchAction: 'none',
@@ -521,6 +665,59 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry, o
           />
         </svg>
       )}
+
+      {/* Zoom controls — the discoverable, accessible path to the same zoom
+         that pinch/wheel drive. Buttons go disabled at the clamp bounds so
+         the limit is visible rather than a dead press. Hidden until the
+         globe is interactive (no point offering zoom over a loading state). */}
+      {projectionData ? (
+        <div className="cb-zoom" role="group" aria-label="Zoom">
+          {/* Inline SVG glyphs, matching the search/close icons elsewhere —
+             a literal "+/−" risks font-fallback tofu on some Android
+             WebViews, the same reason the search field uses an SVG. */}
+          <button
+            type="button"
+            className="cb-zoom-btn"
+            onClick={() => zoomBy(ZOOM_STEP)}
+            disabled={zoom >= MAX_ZOOM}
+            aria-label="Zoom in"
+          >
+            <svg
+              width="18"
+              height="18"
+              viewBox="0 0 18 18"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              aria-hidden="true"
+            >
+              <line x1="9" y1="4" x2="9" y2="14" />
+              <line x1="4" y1="9" x2="14" y2="9" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className="cb-zoom-btn"
+            onClick={() => zoomBy(1 / ZOOM_STEP)}
+            disabled={zoom <= MIN_ZOOM}
+            aria-label="Zoom out"
+          >
+            <svg
+              width="18"
+              height="18"
+              viewBox="0 0 18 18"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              aria-hidden="true"
+            >
+              <line x1="4" y1="9" x2="14" y2="9" />
+            </svg>
+          </button>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -1421,6 +1618,60 @@ export default function Visited({ appId, token }) {
           width: 100%;
           height: 100%;
           display: block;
+        }
+        .cb-globe-svg:focus {
+          outline: none;
+        }
+        .cb-globe-svg:focus-visible {
+          /* Keyboard focus only — a thin inset accent ring so +/- users can
+             see the globe is focused, without a heavy box around it for
+             pointer users. */
+          outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
+          outline-offset: -2px;
+          border-radius: 12px;
+        }
+        /* Zoom controls — vertical pill in the lower-right of the globe,
+           above the sheet. Same surface/border/accent language as the
+           detail-close button so it reads as part of the app, not an
+           add-on. */
+        .cb-zoom {
+          position: absolute;
+          right: 14px;
+          bottom: 16px;
+          display: flex;
+          flex-direction: column;
+          gap: 1px;
+          border-radius: 14px;
+          overflow: hidden;
+          border: 1px solid var(--cb-border);
+          background: var(--cb-border);
+          box-shadow: 0 4px 14px color-mix(in srgb, var(--text) 16%, transparent);
+        }
+        .cb-zoom-btn {
+          /* 44px tap target; the SVG glyph inherits currentColor so the
+             hover/disabled colour transitions below drive the icon too. */
+          width: 44px;
+          height: 44px;
+          display: grid;
+          place-items: center;
+          padding: 0;
+          border: 0;
+          background: var(--cb-surface-strong);
+          color: var(--text);
+          cursor: pointer;
+          transition: background 160ms ease, color 160ms ease;
+        }
+        .cb-zoom-btn:hover:not(:disabled) {
+          background: var(--surface2, var(--surface));
+          color: var(--accent);
+        }
+        .cb-zoom-btn:active:not(:disabled) {
+          background: color-mix(in srgb, var(--accent) 16%, var(--cb-surface-strong));
+        }
+        .cb-zoom-btn:disabled {
+          color: var(--muted);
+          opacity: 0.5;
+          cursor: default;
         }
         .cb-globe-loading {
           position: absolute;

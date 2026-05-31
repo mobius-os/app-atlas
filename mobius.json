@@ -1,8 +1,8 @@
 {
   "id": "countries",
   "name": "Visited",
-  "version": "1.3.0",
-  "description": "Spin the globe, tap a country, mark it visited. Watch your map fill up as the count climbs.",
+  "version": "1.4.0",
+  "description": "Spin and zoom the globe, tap a country, mark it visited. Watch your map fill up as the count climbs.",
   "author": "mobius-os",
   "license": "MIT",
   "homepage": "https://github.com/mobius-os/app-countries",
