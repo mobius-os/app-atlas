@@ -95,7 +95,10 @@ const cubicOut = (t) => 1 - Math.pow(1 - t, 3)
 // Initial rotation — Western Europe slightly above the equator. Easier to
 // recognize than 0,0 (which puts the user in the Atlantic).
 const INITIAL_ROTATION = [12, -22, 0]
-const IDLE_SPIN_DEG_PER_FRAME = 0.035
+// Time-delta based idle spin — degrees per *second*, not per frame, so
+// 120Hz devices don't spin twice as fast as 60Hz ones. ~2.1 deg/s ≈ the
+// previous 0.035 deg/frame at 60Hz.
+const IDLE_SPIN_DEG_PER_SEC = 2.1
 const PAN_DURATION_MS = 950
 
 // localStorage cache keys — the offline runtime caches storage.get reads
@@ -122,6 +125,32 @@ function cacheWrite(appId, name, data) {
   }
 }
 
+// Dedupe a country list by iso3, keeping the first occurrence. The
+// bundled GeoJSON ships duplicate entries for CYP / GUF / SOM, which
+// (a) inflates the total count, and (b) produces duplicate React keys.
+// We log a warning so the dupe doesn't go silent if the seed ever changes.
+function dedupeCountries(list) {
+  if (!Array.isArray(list)) return []
+  const seen = new Set()
+  const out = []
+  const dupes = []
+  for (const c of list) {
+    const iso3 = c?.iso3
+    if (!iso3) continue
+    if (seen.has(iso3)) {
+      dupes.push(iso3)
+      continue
+    }
+    seen.add(iso3)
+    out.push(c)
+  }
+  if (dupes.length) {
+    // eslint-disable-next-line no-console
+    console.warn('Visited: dropped duplicate iso3 entries from seed', dupes)
+  }
+  return out
+}
+
 // --------------------------------------------------------------------------
 // Globe — orthographic d3-geo projection on an SVG canvas.
 // --------------------------------------------------------------------------
@@ -130,6 +159,7 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry, o
   const d3Ref = useRef(null)
   const animationRef = useRef(0)
   const idleRef = useRef(0)
+  const idleLastTickRef = useRef(0)
   const dragRef = useRef({
     active: false,
     moved: false,
@@ -141,18 +171,19 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry, o
   const [size, setSize] = useState({ width: 0, height: 0 })
   const [rotation, setRotation] = useState(INITIAL_ROTATION.slice())
   const [ready, setReady] = useState(false)
-  // depFailed sticks once the d3-geo import gives up so the spinner doesn't
-  // hang forever on a cold offline reload. The SW caches esm.sh cache-first,
-  // so this should only ever trip the very first time an offline user opens
-  // the app — after one online load, the bundle lives in the SW cache.
+  // depFailed used to be sticky for the rest of the session — a single
+  // hiccupping import (e.g. SW updating mid-flight) blanked the globe
+  // until full reload. Now it's paired with a counter that retries on
+  // every reconnect (see the useEffect listening for window 'online').
+  const [depAttempt, setDepAttempt] = useState(0)
   const [depFailed, setDepFailed] = useState(false)
 
   // d3-geo lives at runtime — declared in manifest.runtime.esm_deps so the
   // install UI warns the user. Bundle suffix flattens the dep graph into a
   // single ES module so esm.sh doesn't ship a waterfall of small chunks.
-  // A 5s timeout races the import so an offline cold-start can't hang on the
-  // fetch indefinitely; the timeout-vs-error distinction doesn't matter to
-  // the user, so both paths lead to the same "load when online again" copy.
+  // A 5s timeout races the import so an offline cold-start can't hang on
+  // the fetch indefinitely. depAttempt is in the dep array so the
+  // reconnect retry below can force another attempt.
   useEffect(() => {
     let active = true
     const timeoutMs = 5000
@@ -160,6 +191,7 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry, o
     const timeoutPromise = new Promise((_, reject) => {
       timeoutId = setTimeout(() => reject(new Error('d3-geo load timed out')), timeoutMs)
     })
+    setDepFailed(false)
     Promise.race([import('https://esm.sh/d3-geo@3?bundle'), timeoutPromise])
       .then((mod) => {
         clearTimeout(timeoutId)
@@ -177,6 +209,18 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry, o
       active = false
       clearTimeout(timeoutId)
     }
+  }, [depAttempt])
+
+  // When the browser reconnects, retry the d3-geo import if it failed.
+  // The offline copy at esm.sh will land via the SW cache; this just kicks
+  // the effect to actually try.
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    const retry = () => {
+      if (!d3Ref.current) setDepAttempt((n) => n + 1)
+    }
+    window.addEventListener('online', retry)
+    return () => window.removeEventListener('online', retry)
   }, [])
 
   // Track the visible size of the SVG host so the projection rescales when
@@ -252,20 +296,25 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry, o
   // Idle spin — runs every frame except during user drag or focus pan.
   // Honors prefers-reduced-motion: vestibular users see a still globe by
   // default, and the focus-pan animation still works because that's
-  // user-initiated.
+  // user-initiated. We advance by elapsed time (not by a constant per
+  // frame) so the spin speed is the same on 60Hz and 120Hz displays.
   useEffect(() => {
     const reduceMotion =
       typeof window !== 'undefined' &&
       window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
     if (reduceMotion) return
     cancelAnimationFrame(idleRef.current)
-    const loop = () => {
+    idleLastTickRef.current = 0
+    const loop = (now) => {
+      const last = idleLastTickRef.current || now
+      const dt = Math.min(100, now - last) / 1000 // cap dt at 100ms to avoid jumps after a tab-switch
+      idleLastTickRef.current = now
       if (!dragRef.current.active) {
         // Skip idle motion while an explicit focus pan is animating so we
         // don't fight it. animationRef.current is the rAF id; zero = idle.
         if (!animationRef.current || animationRef.current === 0) {
           const [lng, lat, gamma] = rotationRef.current
-          setRotationBoth([lng + IDLE_SPIN_DEG_PER_FRAME, lat, gamma])
+          setRotationBoth([lng + IDLE_SPIN_DEG_PER_SEC * dt, lat, gamma])
         }
       }
       idleRef.current = requestAnimationFrame(loop)
@@ -333,6 +382,10 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry, o
   // and clear the moved flag — earlier this just flipped active=false
   // and left the moved flag dangling, which could swallow the next tap.
   const onPointerLeave = (event) => finishDrag(event)
+  // Some browsers fire lostpointercapture without a paired pointerup
+  // (e.g. iOS Safari when a modal overlays mid-drag). Treat that as a
+  // drag finish so we don't get stuck with dragRef.active=true.
+  const onLostPointerCapture = (event) => finishDrag(event)
 
   return (
     <div ref={containerRef} className="cb-globe-canvas">
@@ -351,6 +404,7 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry, o
           onPointerUp={onPointerUp}
           onPointerCancel={onPointerCancel}
           onPointerLeave={onPointerLeave}
+          onLostPointerCapture={onLostPointerCapture}
           style={{
             cursor: dragRef.current.active ? 'grabbing' : 'grab',
             touchAction: 'none',
@@ -412,7 +466,9 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry, o
           {/* Countries — each path is wrapped in a <g role="button"> with
              an accessible name + a <title> child. Screen readers read the
              country name (and visited state) instead of "image image image",
-             and hover tooltips surface the name on desktop. */}
+             and hover tooltips surface the name on desktop. tabIndex and
+             a keyboard handler make small-country selection reachable
+             without a sub-pixel tap. */}
           {countries.map((country) => {
             const d = projectionData.path({
               type: 'Feature',
@@ -429,10 +485,17 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry, o
               <g
                 key={country.iso3}
                 role="button"
+                tabIndex={0}
                 aria-label={label}
                 onClick={() => {
                   if (dragRef.current.moved) return
                   onTapCountry(country)
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault()
+                    onTapCountry(country)
+                  }
                 }}
               >
                 <title>{label}</title>
@@ -468,7 +531,12 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry, o
 const SHEET_MIN = 0.30  // 30% of viewport — collapsed
 const SHEET_MID = 0.50  // 50% — neutral
 const SHEET_MAX = 0.80  // 80% — expanded
-const SHEET_STOPS = [SHEET_MIN, SHEET_MID, SHEET_MAX]
+const SHEET_STOPS_DEFAULT = [SHEET_MIN, SHEET_MID, SHEET_MAX]
+// When a country is selected the primary CTA must stay above the fold —
+// we forbid the collapsed stop and require at least MID. (Closing the
+// sheet to 30% with the detail visible hid "Mark visited" off-screen,
+// which read as "the button is gone".)
+const SHEET_STOPS_DETAIL = [SHEET_MID, SHEET_MAX]
 
 function BottomSheet({
   countries,
@@ -480,9 +548,13 @@ function BottomSheet({
   onToggleVisited,
   onDeselect,
 }) {
-  const dragRef = useRef({ active: false, startY: 0, startFrac: SHEET_MID })
+  const dragRef = useRef({ active: false, startY: 0, startFrac: SHEET_MID, fromBody: false })
   const [frac, setFrac] = useState(SHEET_MID)
   const [dragging, setDragging] = useState(false)
+  const scrollRef = useRef(null)
+
+  const minFrac = selectedCountry ? SHEET_MID : SHEET_MIN
+  const stops = selectedCountry ? SHEET_STOPS_DETAIL : SHEET_STOPS_DEFAULT
 
   // When a country is selected, raise the sheet to MID so the detail view
   // has enough room. Don't shrink an already-MAX sheet — the user may have
@@ -496,40 +568,46 @@ function BottomSheet({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCountry])
 
-  const onHandleDown = (event) => {
+  // Drag math reused by both the handle and the body. dragRef.startFrac
+  // captures the sheet height at gesture start; dy is converted to a
+  // frac delta using visualViewport.height so a soft keyboard doesn't
+  // skew the math. We use visualViewport for *both* the displayed sheet
+  // height (CSS percent of the visual viewport) and the drag conversion
+  // so the user's finger and the sheet edge stay aligned.
+  const startDrag = (event, fromBody) => {
     dragRef.current = {
       active: true,
+      fromBody,
       startY: event.clientY,
       startFrac: frac,
     }
     setDragging(true)
     event.currentTarget.setPointerCapture?.(event.pointerId)
   }
-  const onHandleMove = (event) => {
+  const moveDrag = (event) => {
     if (!dragRef.current.active) return
     const dy = event.clientY - dragRef.current.startY
-    // Prefer visualViewport.height when available so the soft keyboard
-    // doesn't make drag math jump (the search input opens the keyboard,
-    // which shrinks visualViewport but leaves innerHeight unchanged).
     const vh =
       (typeof window !== 'undefined' && window.visualViewport?.height) ||
       window.innerHeight ||
       800
     // Drag up = sheet grows = frac increases. dy is positive downward.
-    const next = clamp(dragRef.current.startFrac - dy / vh, SHEET_MIN, SHEET_MAX)
+    const next = clamp(dragRef.current.startFrac - dy / vh, minFrac, SHEET_MAX)
     setFrac(next)
   }
-  const onHandleUp = (event) => {
+  const endDrag = (event) => {
     dragRef.current.active = false
     setDragging(false)
     if (event?.currentTarget?.hasPointerCapture?.(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
-    // Snap to the nearest stop so the sheet always rests in a known pose.
+    // Snap to the nearest legal stop so the sheet always rests in a known
+    // pose. The legal stop set depends on whether a country is selected
+    // (detail mode forbids the collapsed stop).
     setFrac((current) => {
-      let best = SHEET_STOPS[0]
+      let best = stops[0]
       let bestDist = Infinity
-      for (const stop of SHEET_STOPS) {
+      for (const stop of stops) {
         const d = Math.abs(stop - current)
         if (d < bestDist) {
           best = stop
@@ -538,6 +616,37 @@ function BottomSheet({
       }
       return best
     })
+  }
+
+  const onHandleDown = (event) => startDrag(event, false)
+  const onHandleMove = moveDrag
+  const onHandleUp = endDrag
+  // lostpointercapture pairs with the same teardown — without this the
+  // sheet can wedge in mid-drag after iOS Safari yanks capture.
+  const onHandleLost = endDrag
+
+  // The body of the sheet (list / detail) accepts drag-down too — but
+  // only when the inner scroller is at the top. If the user is scrolling
+  // a long list, we want native scroll; if they're at the top and pull
+  // further, we treat that as a sheet drag.
+  const onBodyDown = (event) => {
+    const atTop = (scrollRef.current?.scrollTop || 0) <= 0
+    if (!atTop) return
+    startDrag(event, true)
+  }
+  const onBodyMove = (event) => {
+    if (!dragRef.current.active || !dragRef.current.fromBody) return
+    // If the user dragged UP from the top, prefer native scroll over
+    // sheet expansion — release the drag.
+    const dy = event.clientY - dragRef.current.startY
+    if (dy < -8) {
+      endDrag(event)
+      return
+    }
+    moveDrag(event)
+  }
+  const onBodyUp = (event) => {
+    if (dragRef.current.active && dragRef.current.fromBody) endDrag(event)
   }
 
   const isVisitedSelected = selectedCountry && visited.has(selectedCountry.iso3)
@@ -553,6 +662,7 @@ function BottomSheet({
         onPointerMove={onHandleMove}
         onPointerUp={onHandleUp}
         onPointerCancel={onHandleUp}
+        onLostPointerCapture={onHandleLost}
         role="separator"
         aria-label="Resize sheet"
       >
@@ -664,7 +774,15 @@ function BottomSheet({
             ) : null}
           </div>
 
-          <div className="cb-list">
+          <div
+            className="cb-list"
+            ref={scrollRef}
+            onPointerDown={onBodyDown}
+            onPointerMove={onBodyMove}
+            onPointerUp={onBodyUp}
+            onPointerCancel={onBodyUp}
+            onLostPointerCapture={onBodyUp}
+          >
             {countries.length === 0 ? (
               <div className="cb-list-empty">No countries match.</div>
             ) : (
@@ -828,10 +946,10 @@ export default function Visited({ appId, token }) {
       const rawVisited =
         visitedResult.status === 'fulfilled' ? visitedResult.value : null
 
-      // Countries: prefer fresh, fall back to local cache.
+      // Countries: prefer fresh, fall back to local cache, dedupe by iso3.
       const cachedCountries = cacheRead(appId, 'countries.geo.json')
       const freshCountries = Array.isArray(rawCountries) ? rawCountries : null
-      const countriesList = freshCountries || cachedCountries || []
+      const countriesList = dedupeCountries(freshCountries || cachedCountries || [])
       setCountries(countriesList)
       if (freshCountries) cacheWrite(appId, 'countries.geo.json', freshCountries)
 
@@ -1190,7 +1308,10 @@ export default function Visited({ appId, token }) {
           --cb-shine-2: color-mix(in srgb, var(--bg) 10%, transparent);
           --cb-shine-3: transparent;
           --cb-surface: color-mix(in srgb, var(--surface) 82%, transparent);
-          --cb-surface-strong: color-mix(in srgb, var(--surface2) 92%, transparent);
+          /* --surface2 isn't guaranteed by every Möbius theme; fall back
+             to --surface so the sheet stays solid on themes that don't
+             define the deeper surface token. */
+          --cb-surface-strong: color-mix(in srgb, var(--surface2, var(--surface)) 92%, transparent);
           --cb-border: var(--border);
           position: fixed;
           inset: 0;
@@ -1495,14 +1616,14 @@ export default function Visited({ appId, token }) {
           place-items: center;
           padding: 0;
           border-radius: 999px;
-          background: color-mix(in srgb, var(--surface2) 80%, transparent);
+          background: color-mix(in srgb, var(--surface2, var(--surface)) 80%, transparent);
           color: var(--muted);
           border: 1px solid var(--cb-border);
           cursor: pointer;
           transition: background 160ms ease, color 160ms ease;
         }
         .cb-detail-close:hover {
-          background: var(--surface2);
+          background: var(--surface2, var(--surface));
           color: var(--text);
         }
         .cb-detail-cta {
@@ -1525,7 +1646,7 @@ export default function Visited({ appId, token }) {
           transform: scale(0.985);
         }
         .cb-detail-cta.is-on {
-          background: color-mix(in srgb, var(--surface2) 92%, transparent);
+          background: color-mix(in srgb, var(--surface2, var(--surface)) 92%, transparent);
           color: var(--text);
           border-color: var(--cb-border);
         }
@@ -1570,7 +1691,7 @@ export default function Visited({ appId, token }) {
           transition: background 160ms ease, border-color 160ms ease, transform 120ms ease;
         }
         .cb-row:hover {
-          background: color-mix(in srgb, var(--surface2) 80%, transparent);
+          background: color-mix(in srgb, var(--surface2, var(--surface)) 80%, transparent);
         }
         .cb-row:active {
           transform: scale(0.995);
