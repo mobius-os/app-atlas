@@ -995,56 +995,74 @@ export default function Visited({ appId, token }) {
     return () => window.removeEventListener('message', onMessage)
   }, [])
 
-  // Optimistic update with rollback. We flip the local Set immediately so
-  // the toggle feels instant, then revert if storage.set rejects — otherwise
-  // the user sees a country glow that the next reload silently undoes.
-  //
-  // Offline path: storage.set returns {queued:true} (not a rejection), so
-  // the rollback only fires on real server errors. A queued write keeps
-  // the optimistic state and bumps the pending pill — exactly what we want.
-  //
-  // Functional setVisited closes over the FRESHEST set, so rapid taps on
-  // different countries don't clobber each other. The rollback path also
-  // applies the inverse delta to whatever the current state is — so a
-  // failed save of country A doesn't blow away a successful save of B.
+  // ----- serialized save queue ----------------------------------------
+  // The whole-list PUT model means rapid taps on different countries used
+  // to fire parallel PUTs; tap B could land before tap A, then A's
+  // rollback wiped B's correct value (or vice versa). We now serialize
+  // PUTs through a single in-flight Promise — every save waits its turn.
+  // Pending writes coalesce on the LATEST visited Set (last-writer-wins),
+  // which is exactly the "merge multiple taps into one PUT" behaviour
+  // the user expects when they're rapid-firing through Europe.
+  const saveChainRef = useRef(Promise.resolve())
+  const latestVisitedRef = useRef(visited)
+  useEffect(() => {
+    latestVisitedRef.current = visited
+  }, [visited])
+  // Coalesce flag — if multiple taps land while one PUT is in flight, we
+  // only kick off ONE follow-up PUT (using the latest visited Set) when
+  // the in-flight one settles.
+  const pendingSaveRef = useRef(false)
+
+  const queueSave = useCallback(
+    (countryForErr) => {
+      // Mark a follow-up; if a save was already pending, no need to add
+      // another link — the existing tail will pick up latestVisitedRef.
+      if (pendingSaveRef.current) return
+      pendingSaveRef.current = true
+      saveChainRef.current = saveChainRef.current
+        .catch(() => {}) // swallow prior errors so the chain keeps moving
+        .then(async () => {
+          pendingSaveRef.current = false
+          const snapshot = Array.from(latestVisitedRef.current)
+          try {
+            await storage.set('visited.json', snapshot)
+            cacheWrite(appId, 'visited.json', snapshot)
+            storage.pendingCount().then(setPending).catch(() => {})
+          } catch (err) {
+            // eslint-disable-next-line no-console
+            console.error('Visited:save failed', err)
+            // We can't safely "roll back" here because the user has likely
+            // toggled OTHER countries in the meantime — restoring a stale
+            // snapshot would clobber their newer taps. Instead surface an
+            // error; the next online tick will re-sync from the server.
+            setError(
+              countryForErr
+                ? `Could not save ${countryForErr.displayName} just now — try again in a moment.`
+                : 'Could not save your changes just now — try again in a moment.',
+            )
+          }
+        })
+    },
+    [appId, storage],
+  )
+
+  // Optimistic toggle: flip the local Set immediately so the toggle feels
+  // instant, then queue a save against the LATEST state. We do NOT roll
+  // back per-tap because rapid taps would fight each other on rollback —
+  // see queueSave for the error-handling rationale.
   const toggleVisited = useCallback(
     (country) => {
       if (!country) return
       setError('')
-      let snapshotAdded = false
       setVisited((current) => {
         const next = new Set(current)
-        if (next.has(country.iso3)) {
-          next.delete(country.iso3)
-          snapshotAdded = false
-        } else {
-          next.add(country.iso3)
-          snapshotAdded = true
-        }
-        storage
-          .set('visited.json', Array.from(next))
-          .then(() => {
-            storage.pendingCount().then(setPending).catch(() => {})
-          })
-          .catch((err) => {
-            // eslint-disable-next-line no-console
-            console.error('Visited:save failed', err)
-            // Apply the inverse delta to whatever the current set is so
-            // we don't overwrite a later successful save with stale data.
-            setVisited((latest) => {
-              const rolled = new Set(latest)
-              if (snapshotAdded) rolled.delete(country.iso3)
-              else rolled.add(country.iso3)
-              return rolled
-            })
-            setError(
-              `Could not save ${country.displayName} just now — try again in a moment.`,
-            )
-          })
+        if (next.has(country.iso3)) next.delete(country.iso3)
+        else next.add(country.iso3)
         return next
       })
+      queueSave(country)
     },
-    [storage],
+    [queueSave],
   )
 
   // Tap on globe OR list row — select + pan + open detail view. NEVER
