@@ -767,6 +767,17 @@ function SyncPill({ online, pending, hasRuntime }) {
 // --------------------------------------------------------------------------
 // App root.
 // --------------------------------------------------------------------------
+// Nav state machine — selection -> nav-push -> ack races used to leave
+// phantom history entries when the user closed the detail before the ACK
+// landed. Now: selection in IDLE issues a push and transitions to PUSHING;
+// the ACK promotes PUSHING -> OPEN; the shell's nav-back returns OPEN ->
+// IDLE; user-initiated close from PUSHING is recorded so the late ACK
+// auto-pops; from OPEN it issues nav-pop and goes POPPING.
+const NAV_IDLE = 'idle'
+const NAV_PUSHING = 'pushing'
+const NAV_OPEN = 'open'
+const NAV_POPPING = 'popping'
+
 export default function Visited({ appId, token }) {
   const storage = useMemo(() => makeStorage({ appId, token }), [appId, token])
 
@@ -932,46 +943,94 @@ export default function Visited({ appId, token }) {
     setFocusRequest({ iso3: country.iso3, duration, stamp: Date.now() })
   }, [])
 
-  // nav-push integration — when a country is selected we push onto the
-  // shell's back-stack so the device back button (or swipe-back gesture)
-  // returns to the unfiltered globe instead of dismissing the whole app.
-  // pushedRef tracks whether we currently own a back-stack entry so we
-  // don't push twice when the user switches from country A to country B.
-  const pushedRef = useRef(false)
-  const navPush = useCallback(() => {
-    if (pushedRef.current) return
-    if (typeof window === 'undefined' || !window.parent) return
-    const requestId = `visited-${Date.now()}`
-    const onAck = (event) => {
+  // ----- nav state machine --------------------------------------------
+  // navStateRef holds the current state without forcing a re-render; the
+  // user-visible state is selectedIso3. closeRequestedRef flags "the user
+  // closed while we were still PUSHING" — when the ACK eventually lands
+  // it'll auto-emit nav-pop instead of stranding a phantom entry on the
+  // shell's back-stack.
+  const navStateRef = useRef(NAV_IDLE)
+  const closeRequestedRef = useRef(false)
+  const pendingRequestIdRef = useRef('')
+  const ackHandlerRef = useRef(null)
+
+  const installAckHandler = useCallback(() => {
+    if (typeof window === 'undefined') return
+    if (ackHandlerRef.current) return // already installed
+    const handler = (event) => {
       if (event.origin !== window.location.origin) return
-      if (event.data?.requestId !== requestId) return
-      if (event.data.type === 'moebius:nav-push-ack') {
-        pushedRef.current = true
+      if (!pendingRequestIdRef.current) return
+      if (event.data?.requestId !== pendingRequestIdRef.current) return
+      if (event.data.type !== 'moebius:nav-push-ack') return
+      pendingRequestIdRef.current = ''
+      window.removeEventListener('message', handler)
+      ackHandlerRef.current = null
+      // ACK landed. What we do depends on whether the user already closed.
+      if (navStateRef.current === NAV_PUSHING && closeRequestedRef.current) {
+        // User closed before the ACK. Auto-pop so the back-stack stays
+        // consistent and the late ACK doesn't strand a phantom entry.
+        closeRequestedRef.current = false
+        try {
+          window.parent?.postMessage(
+            { type: 'moebius:nav-pop' },
+            window.location.origin,
+          )
+        } catch {
+          // Older shell — no harm done.
+        }
+        navStateRef.current = NAV_IDLE
+      } else if (navStateRef.current === NAV_PUSHING) {
+        navStateRef.current = NAV_OPEN
       }
-      window.removeEventListener('message', onAck)
+      // If we're already IDLE or POPPING by the time the ACK arrives,
+      // ignore it — the state machine has already moved on.
     }
-    window.addEventListener('message', onAck)
+    window.addEventListener('message', handler)
+    ackHandlerRef.current = handler
+  }, [])
+
+  const navPush = useCallback(() => {
+    if (typeof window === 'undefined' || !window.parent) return
+    if (navStateRef.current !== NAV_IDLE) return
+    const requestId = `visited-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    pendingRequestIdRef.current = requestId
+    closeRequestedRef.current = false
+    navStateRef.current = NAV_PUSHING
+    installAckHandler()
     try {
       window.parent.postMessage(
         { type: 'moebius:nav-push', label: 'visited-detail', requestId },
         window.location.origin,
       )
     } catch {
-      window.removeEventListener('message', onAck)
+      // No shell — clear pending so we don't sit in PUSHING forever.
+      pendingRequestIdRef.current = ''
+      navStateRef.current = NAV_IDLE
+      if (ackHandlerRef.current) {
+        window.removeEventListener('message', ackHandlerRef.current)
+        ackHandlerRef.current = null
+      }
     }
-  }, [])
+  }, [installAckHandler])
+
   const navPop = useCallback(() => {
-    if (!pushedRef.current) return
     if (typeof window === 'undefined' || !window.parent) return
-    try {
-      window.parent.postMessage(
-        { type: 'moebius:nav-pop' },
-        window.location.origin,
-      )
-    } catch {
-      // Older shell with no nav-stack — selection still clears locally.
+    if (navStateRef.current === NAV_OPEN) {
+      navStateRef.current = NAV_POPPING
+      try {
+        window.parent.postMessage(
+          { type: 'moebius:nav-pop' },
+          window.location.origin,
+        )
+      } catch {
+        // Older shell — selection still clears locally.
+      }
+      navStateRef.current = NAV_IDLE
+    } else if (navStateRef.current === NAV_PUSHING) {
+      // Close happened before ACK; flag so the ACK handler auto-pops.
+      closeRequestedRef.current = true
     }
-    pushedRef.current = false
+    // From IDLE / POPPING: nothing to do.
   }, [])
 
   const deselect = useCallback(() => {
@@ -987,12 +1046,38 @@ export default function Visited({ appId, token }) {
     const onMessage = (event) => {
       if (event.origin !== window.location.origin) return
       if (event.data?.type === 'moebius:nav-back') {
-        pushedRef.current = false
+        navStateRef.current = NAV_IDLE
+        closeRequestedRef.current = false
         setSelectedIso3('')
       }
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
+  }, [])
+
+  // Unmount: tear down any in-flight ACK listener so a late message
+  // doesn't reach a dead component. If we still own a back-stack entry,
+  // pop it so the shell doesn't keep a phantom around.
+  useEffect(() => {
+    return () => {
+      if (ackHandlerRef.current) {
+        window.removeEventListener('message', ackHandlerRef.current)
+        ackHandlerRef.current = null
+      }
+      if (navStateRef.current === NAV_OPEN || navStateRef.current === NAV_PUSHING) {
+        try {
+          window.parent?.postMessage(
+            { type: 'moebius:nav-pop' },
+            window.location.origin,
+          )
+        } catch {
+          // No shell — no-op.
+        }
+      }
+      navStateRef.current = NAV_IDLE
+      closeRequestedRef.current = false
+      pendingRequestIdRef.current = ''
+    }
   }, [])
 
   // ----- serialized save queue ----------------------------------------
