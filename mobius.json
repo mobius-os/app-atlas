@@ -1,7 +1,7 @@
 {
   "id": "countries",
   "name": "Countries Been",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Tap a 3D globe to mark the countries you've visited. See them glow on the map, in a list, and as a count.",
   "author": "mobius-os",
   "license": "MIT",
