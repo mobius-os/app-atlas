@@ -98,6 +98,30 @@ const INITIAL_ROTATION = [12, -22, 0]
 const IDLE_SPIN_DEG_PER_FRAME = 0.035
 const PAN_DURATION_MS = 950
 
+// localStorage cache keys — the offline runtime caches storage.get reads
+// but cold-reload-without-runtime needs *some* local mirror or the boot
+// screen shows nothing forever. We mirror visited + countries on every
+// successful read; the boot path consults the cache first if the network
+// read returns null. Scoped by appId so two installs don't collide.
+const CACHE_KEY = (appId, name) => `visited-app:${appId}:${name}`
+function cacheRead(appId, name) {
+  if (typeof localStorage === 'undefined') return null
+  try {
+    const raw = localStorage.getItem(CACHE_KEY(appId, name))
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
+function cacheWrite(appId, name, data) {
+  if (typeof localStorage === 'undefined') return
+  try {
+    localStorage.setItem(CACHE_KEY(appId, name), JSON.stringify(data))
+  } catch {
+    // Quota or private-mode — silent; cache is a nice-to-have.
+  }
+}
+
 // --------------------------------------------------------------------------
 // Globe — orthographic d3-geo projection on an SVG canvas.
 // --------------------------------------------------------------------------
@@ -766,46 +790,75 @@ export default function Visited({ appId, token }) {
   // can render an "offline — using last-known state" banner instead of
   // pretending the world has zero countries.
   const [offlineBoot, setOfflineBoot] = useState(false)
+  // Did we manage to render anything for the user? Drives the offline banner
+  // copy — "showing your last visited list" only when we actually have one.
+  const [hasCachedVisited, setHasCachedVisited] = useState(false)
 
   // ----- boot ----------------------------------------------------------
-  useEffect(() => {
-    let active = true
-    async function boot() {
-      try {
-        setLoading(true)
-        const [countriesData, visitedData] = await Promise.all([
-          storage.get('countries.geo.json'),
-          storage.get('visited.json'),
-        ])
-        if (!active) return
-        const countriesOk = Array.isArray(countriesData)
-        const visitedOk = Array.isArray(visitedData)
-        if (countriesOk) setCountries(countriesData)
-        if (visitedOk) setVisited(new Set(visitedData))
-        // storage.get returns null offline. Treat a null on the bundled
-        // GeoJSON as "we're offline and have nothing cached" — show a
-        // banner instead of a confident "0 / …" that reads as fact.
-        if (
-          !countriesOk &&
-          typeof navigator !== 'undefined' &&
-          navigator.onLine === false
-        ) {
-          setOfflineBoot(true)
-        }
+  // boot() lives outside the effect so we can re-run it from the online
+  // listener below — offline cold-reload that later connects shouldn't be
+  // stuck on the empty state forever.
+  const bootInFlightRef = useRef(false)
+  const boot = useCallback(async () => {
+    if (bootInFlightRef.current) return
+    bootInFlightRef.current = true
+    try {
+      setLoading(true)
+      // Promise.allSettled, not Promise.all — when only one side fails we
+      // still want to keep the side that succeeded (Promise.all discards
+      // both on any failure, which used to wipe the visited list when the
+      // countries fetch hiccupped).
+      const [countriesResult, visitedResult] = await Promise.allSettled([
+        storage.get('countries.geo.json'),
+        storage.get('visited.json'),
+      ])
+      const rawCountries =
+        countriesResult.status === 'fulfilled' ? countriesResult.value : null
+      const rawVisited =
+        visitedResult.status === 'fulfilled' ? visitedResult.value : null
+
+      // Countries: prefer fresh, fall back to local cache.
+      const cachedCountries = cacheRead(appId, 'countries.geo.json')
+      const freshCountries = Array.isArray(rawCountries) ? rawCountries : null
+      const countriesList = freshCountries || cachedCountries || []
+      setCountries(countriesList)
+      if (freshCountries) cacheWrite(appId, 'countries.geo.json', freshCountries)
+
+      // Visited: prefer fresh, fall back to local cache.
+      const cachedVisited = cacheRead(appId, 'visited.json')
+      const freshVisited = Array.isArray(rawVisited) ? rawVisited : null
+      const visitedList = freshVisited || cachedVisited || []
+      setVisited(new Set(visitedList))
+      if (freshVisited) cacheWrite(appId, 'visited.json', freshVisited)
+      setHasCachedVisited((freshVisited || cachedVisited || []).length > 0)
+
+      // If we ended up with zero countries AND the network is offline, the
+      // banner is honest: "offline, here's what we cached". If we have
+      // countries (from cache or net), no banner.
+      const isOffline =
+        typeof navigator !== 'undefined' && navigator.onLine === false
+      setOfflineBoot(countriesList.length === 0 && isOffline)
+
+      if (countriesList.length === 0 && !isOffline) {
+        // Online but we got nothing — flag a real error so the user knows
+        // to try again instead of staring at an empty globe.
+        setError('Could not load the world right now. Try again in a moment.')
+      } else {
         setError('')
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.error('Visited:boot failed', err)
-        if (active) setError('Could not load the world right now. Try again in a moment.')
-      } finally {
-        if (active) setLoading(false)
       }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('Visited:boot failed', err)
+      setError('Could not load the world right now. Try again in a moment.')
+    } finally {
+      setLoading(false)
+      bootInFlightRef.current = false
     }
-    boot()
-    return () => {
-      active = false
-    }
-  }, [storage])
+  }, [appId, storage])
+
+  useEffect(() => {
+    boot().catch(() => {})
+  }, [boot])
 
   // Online/offline tracking. We listen to the browser events directly
   // (the runtime doesn't proxy them) and refresh pending count on each
@@ -828,6 +881,20 @@ export default function Visited({ appId, token }) {
       clearInterval(id)
     }
   }, [storage])
+
+  // When the browser reconnects after an offline cold-start, retry boot
+  // so the empty globe gets populated. boot() is idempotent and guards
+  // against parallel runs via bootInFlightRef.
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    const onOnline = () => {
+      // Only retry boot if we still don't have countries — otherwise we'd
+      // wipe the user's view every reconnect.
+      if (countries.length === 0) boot().catch(() => {})
+    }
+    window.addEventListener('online', onOnline)
+    return () => window.removeEventListener('online', onOnline)
+  }, [boot, countries.length])
 
   // ----- derived list (filtered + sorted) ------------------------------
   const filteredCountries = useMemo(() => {
@@ -1483,8 +1550,9 @@ export default function Visited({ appId, token }) {
 
       {offlineBoot ? (
         <div className="cb-banner" role="status">
-          You're offline — showing your last visited list. The globe and full country
-          list come back when you're online again.
+          {hasCachedVisited
+            ? "You're offline — showing your last visited list. The globe and full country list come back when you're online again."
+            : "You're offline and we don't have a cached copy yet. Connect once and this app works offline forever after."}
         </div>
       ) : null}
 
