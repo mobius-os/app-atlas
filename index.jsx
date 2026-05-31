@@ -66,7 +66,7 @@ const PAN_DURATION_MS = 950
 // --------------------------------------------------------------------------
 // Globe — orthographic d3-geo projection on an SVG canvas.
 // --------------------------------------------------------------------------
-function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry }) {
+function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry, onTapOcean }) {
   const containerRef = useRef(null)
   const d3Ref = useRef(null)
   const animationRef = useRef(0)
@@ -270,9 +270,10 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry })
   }
   const onPointerUp = (event) => finishDrag(event)
   const onPointerCancel = (event) => finishDrag(event)
-  const onPointerLeave = () => {
-    dragRef.current.active = false
-  }
+  // Route pointer-leave through finishDrag so we always release capture
+  // and clear the moved flag — earlier this just flipped active=false
+  // and left the moved flag dangling, which could swallow the next tap.
+  const onPointerLeave = (event) => finishDrag(event)
 
   return (
     <div ref={containerRef} className="cb-globe-canvas">
@@ -312,23 +313,33 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry })
             </filter>
           </defs>
 
-          {/* Outer accent halo */}
+          {/* Outer accent halo. Radius shrunk from 1.06× to 1.02× so the
+             blur (stdDeviation 16) doesn't leak past the SVG edge on
+             short layouts; the glow now feels like it belongs to the
+             globe rather than the container. */}
           <circle
             cx={size.width / 2}
             cy={size.height / 2}
-            r={projectionData.radius * 1.06}
+            r={projectionData.radius * 1.02}
             fill="var(--accent)"
-            opacity="0.12"
+            opacity="0.14"
             filter="url(#cb-glow)"
           />
 
           {/* Ocean sphere — stroke derives from --text so the rim stays
-             visible on light themes (where pure-white would vanish). */}
+             visible on light themes (where pure-white would vanish).
+             Tapping the ocean clears selection (so the user can return
+             to the unfiltered list without hunting for the close X). */}
           <path
             d={projectionData.path({ type: 'Sphere' })}
             fill="url(#cb-ocean)"
             stroke="color-mix(in srgb, var(--text) 22%, transparent)"
             strokeWidth="1"
+            onClick={() => {
+              if (dragRef.current.moved) return
+              onTapOcean?.()
+            }}
+            style={{ cursor: 'pointer' }}
           />
 
           {/* Graticule */}
@@ -403,14 +414,28 @@ const SHEET_STOPS = [SHEET_MIN, SHEET_MID, SHEET_MAX]
 function BottomSheet({
   countries,
   visited,
-  selectedIso3,
+  selectedCountry,
   query,
   onQueryChange,
   onSelect,
   onToggleVisited,
+  onDeselect,
 }) {
   const dragRef = useRef({ active: false, startY: 0, startFrac: SHEET_MID })
   const [frac, setFrac] = useState(SHEET_MID)
+  const [dragging, setDragging] = useState(false)
+
+  // When a country is selected, raise the sheet to MID so the detail view
+  // has enough room. Don't shrink an already-MAX sheet — the user may have
+  // expanded it for the list and we shouldn't snap it down underneath them.
+  useEffect(() => {
+    if (selectedCountry && frac < SHEET_MID) {
+      setFrac(SHEET_MID)
+    }
+    // We deliberately don't react when frac changes — this effect only
+    // fires when selection appears/disappears.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCountry])
 
   const onHandleDown = (event) => {
     dragRef.current = {
@@ -418,18 +443,26 @@ function BottomSheet({
       startY: event.clientY,
       startFrac: frac,
     }
+    setDragging(true)
     event.currentTarget.setPointerCapture?.(event.pointerId)
   }
   const onHandleMove = (event) => {
     if (!dragRef.current.active) return
     const dy = event.clientY - dragRef.current.startY
-    const vh = window.innerHeight || 800
+    // Prefer visualViewport.height when available so the soft keyboard
+    // doesn't make drag math jump (the search input opens the keyboard,
+    // which shrinks visualViewport but leaves innerHeight unchanged).
+    const vh =
+      (typeof window !== 'undefined' && window.visualViewport?.height) ||
+      window.innerHeight ||
+      800
     // Drag up = sheet grows = frac increases. dy is positive downward.
     const next = clamp(dragRef.current.startFrac - dy / vh, SHEET_MIN, SHEET_MAX)
     setFrac(next)
   }
   const onHandleUp = (event) => {
     dragRef.current.active = false
+    setDragging(false)
     if (event?.currentTarget?.hasPointerCapture?.(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
@@ -448,10 +481,12 @@ function BottomSheet({
     })
   }
 
+  const isVisitedSelected = selectedCountry && visited.has(selectedCountry.iso3)
+
   return (
     <div
-      className="cb-sheet"
-      style={{ height: `${frac * 100}vh` }}
+      className={'cb-sheet' + (dragging ? ' cb-sheet--dragging' : '')}
+      style={{ height: `${frac * 100}%` }}
     >
       <div
         className="cb-sheet-handle"
@@ -460,97 +495,167 @@ function BottomSheet({
         onPointerUp={onHandleUp}
         onPointerCancel={onHandleUp}
         role="separator"
-        aria-label="Resize list"
+        aria-label="Resize sheet"
       >
         <span className="cb-sheet-grip" />
       </div>
 
-      <div className="cb-sheet-search">
-        {/* Inline SVG, not U+2315 — the codepoint renders as tofu on some
-            Android WebViews even when the system claims symbol coverage. */}
-        <svg
-          className="cb-sheet-search-icon"
-          width="16"
-          height="16"
-          viewBox="0 0 16 16"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.6"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-          focusable="false"
-        >
-          <circle cx="7" cy="7" r="4.5" />
-          <line x1="10.5" y1="10.5" x2="13.5" y2="13.5" />
-        </svg>
-        <input
-          type="search"
-          value={query}
-          onChange={(event) => onQueryChange(event.target.value)}
-          placeholder="Search countries"
-          aria-label="Search countries"
-          autoCorrect="off"
-          autoCapitalize="off"
-          spellCheck={false}
-        />
-      </div>
-
-      <div className="cb-list">
-        {countries.length === 0 ? (
-          <div className="cb-list-empty">No countries match.</div>
-        ) : (
-          countries.map((country) => {
-            const isVisited = visited.has(country.iso3)
-            const isSelected = country.iso3 === selectedIso3
-            return (
-              <div
-                key={country.iso3}
-                role="button"
-                tabIndex={0}
-                aria-label={`Show ${country.displayName} on the globe`}
-                className={
-                  'cb-row' +
-                  (isVisited ? ' cb-row--visited' : '') +
-                  (isSelected ? ' cb-row--selected' : '')
-                }
-                onClick={() => onSelect(country)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault()
-                    onSelect(country)
-                  }
-                }}
+      {selectedCountry ? (
+        <div className="cb-detail" role="region" aria-label="Country detail">
+          <div className="cb-detail-head">
+            <span className="cb-detail-flag" aria-hidden="true">
+              {selectedCountry.flag || '🏳️'}
+            </span>
+            <div className="cb-detail-name">
+              <strong>{selectedCountry.displayName}</strong>
+              <small>
+                {selectedCountry.region || 'World'}
+                {selectedCountry.subregion ? ` · ${selectedCountry.subregion}` : ''}
+              </small>
+            </div>
+            <button
+              type="button"
+              className="cb-detail-close"
+              onClick={onDeselect}
+              aria-label="Close country detail"
+            >
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 18 18"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                aria-hidden="true"
               >
-                <span className="cb-row-flag" aria-hidden="true">
-                  {country.flag || '🏳️'}
-                </span>
-                <span className="cb-row-text">
-                  <strong>{country.displayName}</strong>
-                  <small>
-                    {country.region || 'World'}
-                    {country.subregion ? ` · ${country.subregion}` : ''}
-                  </small>
-                </span>
-                <button
-                  type="button"
-                  className={'cb-row-pill' + (isVisited ? ' is-on' : '')}
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    onToggleVisited(country)
-                  }}
-                  aria-pressed={isVisited}
-                  aria-label={isVisited
-                    ? `Mark ${country.displayName} as not visited`
-                    : `Mark ${country.displayName} as visited`}
+                <line x1="4" y1="4" x2="14" y2="14" />
+                <line x1="14" y1="4" x2="4" y2="14" />
+              </svg>
+            </button>
+          </div>
+
+          <button
+            type="button"
+            className={'cb-detail-cta' + (isVisitedSelected ? ' is-on' : '')}
+            onClick={() => onToggleVisited(selectedCountry)}
+            aria-pressed={isVisitedSelected}
+          >
+            {isVisitedSelected ? 'Mark not visited' : 'Mark visited'}
+          </button>
+
+          <div className="cb-detail-meta">
+            {isVisitedSelected
+              ? 'In your visited list.'
+              : 'Tap above to add it to your visited list.'}
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="cb-sheet-search">
+            {/* Inline SVG, not U+2315 — the codepoint renders as tofu on some
+                Android WebViews even when the system claims symbol coverage. */}
+            <svg
+              className="cb-sheet-search-icon"
+              width="16"
+              height="16"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <circle cx="7" cy="7" r="4.5" />
+              <line x1="10.5" y1="10.5" x2="13.5" y2="13.5" />
+            </svg>
+            <input
+              type="search"
+              value={query}
+              onChange={(event) => onQueryChange(event.target.value)}
+              placeholder="Search countries"
+              aria-label="Search countries"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
+            />
+            {query ? (
+              <button
+                type="button"
+                className="cb-sheet-search-clear"
+                onClick={() => onQueryChange('')}
+                aria-label="Clear search"
+              >
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 14 14"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                  aria-hidden="true"
                 >
-                  {isVisited ? 'Been' : 'Mark'}
-                </button>
-              </div>
-            )
-          })
-        )}
-      </div>
+                  <line x1="3" y1="3" x2="11" y2="11" />
+                  <line x1="11" y1="3" x2="3" y2="11" />
+                </svg>
+              </button>
+            ) : null}
+          </div>
+
+          <div className="cb-list">
+            {countries.length === 0 ? (
+              <div className="cb-list-empty">No countries match.</div>
+            ) : (
+              countries.map((country) => {
+                const isVisited = visited.has(country.iso3)
+                return (
+                  <div
+                    key={country.iso3}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Open ${country.displayName}`}
+                    className={'cb-row' + (isVisited ? ' cb-row--visited' : '')}
+                    onClick={() => onSelect(country)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        onSelect(country)
+                      }
+                    }}
+                  >
+                    <span className="cb-row-flag" aria-hidden="true">
+                      {country.flag || '🏳️'}
+                    </span>
+                    <span className="cb-row-text">
+                      <strong>{country.displayName}</strong>
+                      <small>
+                        {country.region || 'World'}
+                        {country.subregion ? ` · ${country.subregion}` : ''}
+                      </small>
+                    </span>
+                    {isVisited ? (
+                      <span
+                        className="cb-row-badge"
+                        aria-label="Visited"
+                        title="Visited"
+                      >
+                        ✓
+                      </span>
+                    ) : (
+                      <span className="cb-row-chevron" aria-hidden="true">
+                        ›
+                      </span>
+                    )}
+                  </div>
+                )
+              })
+            )}
+          </div>
+        </>
+      )}
     </div>
   )
 }
@@ -725,64 +830,137 @@ export default function Visited({ appId, token }) {
     setFocusRequest({ iso3: country.iso3, duration, stamp: Date.now() })
   }, [])
 
+  // nav-push integration — when a country is selected we push onto the
+  // shell's back-stack so the device back button (or swipe-back gesture)
+  // returns to the unfiltered globe instead of dismissing the whole app.
+  // pushedRef tracks whether we currently own a back-stack entry so we
+  // don't push twice when the user switches from country A to country B.
+  const pushedRef = useRef(false)
+  const navPush = useCallback(() => {
+    if (pushedRef.current) return
+    if (typeof window === 'undefined' || !window.parent) return
+    const requestId = `visited-${Date.now()}`
+    const onAck = (event) => {
+      if (event.origin !== window.location.origin) return
+      if (event.data?.requestId !== requestId) return
+      if (event.data.type === 'moebius:nav-push-ack') {
+        pushedRef.current = true
+      }
+      window.removeEventListener('message', onAck)
+    }
+    window.addEventListener('message', onAck)
+    try {
+      window.parent.postMessage(
+        { type: 'moebius:nav-push', label: 'visited-detail', requestId },
+        window.location.origin,
+      )
+    } catch {
+      window.removeEventListener('message', onAck)
+    }
+  }, [])
+  const navPop = useCallback(() => {
+    if (!pushedRef.current) return
+    if (typeof window === 'undefined' || !window.parent) return
+    try {
+      window.parent.postMessage(
+        { type: 'moebius:nav-pop' },
+        window.location.origin,
+      )
+    } catch {
+      // Older shell with no nav-stack — selection still clears locally.
+    }
+    pushedRef.current = false
+  }, [])
+
+  const deselect = useCallback(() => {
+    setSelectedIso3('')
+    navPop()
+  }, [navPop])
+
+  // Listen for shell back-button events. The shell emits moebius:nav-back
+  // when the user swipes/taps back while we own a stack entry; clear
+  // selection without echoing another nav-pop (the shell already popped).
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    const onMessage = (event) => {
+      if (event.origin !== window.location.origin) return
+      if (event.data?.type === 'moebius:nav-back') {
+        pushedRef.current = false
+        setSelectedIso3('')
+      }
+    }
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [])
+
   // Optimistic update with rollback. We flip the local Set immediately so
-  // the tap feels instant, then revert if storage.set rejects — otherwise
+  // the toggle feels instant, then revert if storage.set rejects — otherwise
   // the user sees a country glow that the next reload silently undoes.
   //
   // Offline path: storage.set returns {queued:true} (not a rejection), so
   // the rollback only fires on real server errors. A queued write keeps
   // the optimistic state and bumps the pending pill — exactly what we want.
+  //
+  // Functional setVisited closes over the FRESHEST set, so rapid taps on
+  // different countries don't clobber each other. The rollback path also
+  // applies the inverse delta to whatever the current state is — so a
+  // failed save of country A doesn't blow away a successful save of B.
   const toggleVisited = useCallback(
     (country) => {
       if (!country) return
-      const previous = visited
-      const next = new Set(previous)
-      if (next.has(country.iso3)) next.delete(country.iso3)
-      else next.add(country.iso3)
-      setVisited(next)
       setError('')
-      storage
-        .set('visited.json', Array.from(next))
-        .then(() => {
-          // Refresh outbox depth — queued writes bump it, synced writes
-          // leave it unchanged (or drain it during a flush we missed).
-          storage.pendingCount().then(setPending).catch(() => {})
-        })
-        .catch((err) => {
-          // eslint-disable-next-line no-console
-          console.error('Visited:save failed', err)
-          // Rollback to the pre-tap Set so on-screen state matches what's
-          // actually persisted.
-          setVisited(previous)
-          setError(
-            `Could not save ${country.displayName} just now — try again in a moment.`,
-          )
-        })
+      let snapshotAdded = false
+      setVisited((current) => {
+        const next = new Set(current)
+        if (next.has(country.iso3)) {
+          next.delete(country.iso3)
+          snapshotAdded = false
+        } else {
+          next.add(country.iso3)
+          snapshotAdded = true
+        }
+        storage
+          .set('visited.json', Array.from(next))
+          .then(() => {
+            storage.pendingCount().then(setPending).catch(() => {})
+          })
+          .catch((err) => {
+            // eslint-disable-next-line no-console
+            console.error('Visited:save failed', err)
+            // Apply the inverse delta to whatever the current set is so
+            // we don't overwrite a later successful save with stale data.
+            setVisited((latest) => {
+              const rolled = new Set(latest)
+              if (snapshotAdded) rolled.delete(country.iso3)
+              else rolled.add(country.iso3)
+              return rolled
+            })
+            setError(
+              `Could not save ${country.displayName} just now — try again in a moment.`,
+            )
+          })
+        return next
+      })
     },
-    [storage, visited],
+    [storage],
   )
 
-  // Tap on globe — pan to face the country AND toggle in one motion. This
-  // is the headline interaction; a single tap should always make a visible
-  // change.
-  const onTapCountry = useCallback(
+  // Tap on globe OR list row — select + pan + open detail view. NEVER
+  // toggles. The detail view's primary CTA is the only path to commit
+  // a visited/not-visited change.
+  const selectCountry = useCallback(
     (country) => {
+      if (!country) return
       setSelectedIso3(country.iso3)
       focusCountry(country)
-      toggleVisited(country)
+      navPush()
     },
-    [focusCountry, toggleVisited],
+    [focusCountry, navPush],
   )
 
-  // Tap on a list row — pan to face the country, but DON'T toggle (the
-  // pill on the row handles toggling). Lets the user scroll through the
-  // list and explore without accidentally marking countries.
-  const onSelectFromList = useCallback(
-    (country) => {
-      setSelectedIso3(country.iso3)
-      focusCountry(country)
-    },
-    [focusCountry],
+  const selectedCountry = useMemo(
+    () => (selectedIso3 ? countries.find((c) => c.iso3 === selectedIso3) || null : null),
+    [countries, selectedIso3],
   )
 
   // ----- render --------------------------------------------------------
@@ -797,11 +975,14 @@ export default function Visited({ appId, token }) {
           --cb-ocean-1: color-mix(in srgb, var(--accent) 28%, color-mix(in srgb, var(--bg) 70%, var(--text) 30%));
           --cb-ocean-2: color-mix(in srgb, var(--accent) 14%, color-mix(in srgb, var(--bg) 55%, var(--text) 45%));
           --cb-ocean-3: color-mix(in srgb, var(--bg) 40%, var(--text) 60%);
-          /* Specular shine — a soft white highlight in dark themes, a faint
-             accent-tinted halo in light ones (where pure white disappears
-             into the page). */
-          --cb-shine-1: color-mix(in srgb, white 55%, transparent);
-          --cb-shine-2: color-mix(in srgb, white 6%, transparent);
+          /* Specular shine — a soft highlight. Mixing with literal white
+             read OK on dark themes but flat-out vanished into the page on
+             light ones; mix toward --bg so the highlight sits one shade
+             lighter than the underlying surface in every theme. The
+             accent tint keeps the globe feeling planet-shaped rather
+             than just paler-than-its-frame. */
+          --cb-shine-1: color-mix(in srgb, var(--bg) 70%, var(--accent) 30%);
+          --cb-shine-2: color-mix(in srgb, var(--bg) 10%, transparent);
           --cb-shine-3: transparent;
           --cb-surface: color-mix(in srgb, var(--surface) 82%, transparent);
           --cb-surface-strong: color-mix(in srgb, var(--surface2) 92%, transparent);
@@ -943,15 +1124,21 @@ export default function Visited({ appId, token }) {
         }
         .cb-country--visited {
           fill: var(--accent);
-          stroke: color-mix(in srgb, var(--accent) 60%, white);
+          /* Stroke previously mixed accent with literal "white", which
+             vanished the outline on light themes. Mix with --bg so the
+             border keeps separation from the ocean in every theme. */
+          stroke: color-mix(in srgb, var(--accent) 60%, var(--bg));
           stroke-width: 0.6;
           filter:
             drop-shadow(0 0 4px color-mix(in srgb, var(--accent) 70%, transparent))
             drop-shadow(0 0 10px color-mix(in srgb, var(--accent) 40%, transparent));
         }
         .cb-country--selected {
-          stroke: white;
-          stroke-width: 1.4;
+          /* Theme-derived outline: high-contrast mix of --text against
+             --bg so the selected ring stays visible in both light and
+             dark themes (pure white disappears on a pale background). */
+          stroke: color-mix(in srgb, var(--text) 88%, var(--bg));
+          stroke-width: 1.6;
         }
 
         .cb-error {
@@ -982,14 +1169,27 @@ export default function Visited({ appId, token }) {
           backdrop-filter: blur(14px);
           border-top: 1px solid var(--cb-border);
           border-radius: 22px 22px 0 0;
-          box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.18);
-          min-height: 30vh;
+          /* Neutral elevation shadow — same in light + dark themes; the
+             color-mix tint comes from the surface underneath. */
+          box-shadow: 0 -10px 30px color-mix(in srgb, var(--text) 18%, transparent);
+          /* Snap animations only — drag updates set the dragging class
+             which disables the transition so the sheet tracks the finger
+             without a perceived lag. */
           transition: height 220ms cubic-bezier(.22,1,.36,1);
           overflow: hidden;
+          /* min-height previously used vh which conflicted with the
+             percent-of-cb-app inline height during keyboard-up; drop
+             the min entirely — SHEET_MIN (0.30) already enforces the
+             floor in code. */
+        }
+        .cb-sheet--dragging {
+          transition: none;
         }
         .cb-sheet-handle {
+          /* 44px tap target — the grip itself stays visually small but
+             the surrounding hit area is finger-friendly. */
           flex-shrink: 0;
-          height: 24px;
+          height: 44px;
           display: grid;
           place-items: center;
           touch-action: none;
@@ -1029,6 +1229,106 @@ export default function Visited({ appId, token }) {
         .cb-sheet-search input::placeholder {
           color: var(--muted);
         }
+        .cb-sheet-search-clear {
+          flex-shrink: 0;
+          min-width: 28px;
+          min-height: 28px;
+          display: grid;
+          place-items: center;
+          padding: 0;
+          border-radius: 999px;
+          background: transparent;
+          color: var(--muted);
+          border: 0;
+          cursor: pointer;
+        }
+        .cb-sheet-search-clear:hover {
+          color: var(--text);
+        }
+
+        /* Detail view — replaces search + list while a country is
+           selected. Big flag, name, region, primary CTA, close X.
+           Replacing rather than overlaying keeps the surface honest:
+           one mode at a time, predictable Back behavior. */
+        .cb-detail {
+          display: flex;
+          flex-direction: column;
+          gap: 16px;
+          padding: 4px 18px 24px;
+          flex: 1 1 auto;
+          min-height: 0;
+          overflow-y: auto;
+        }
+        .cb-detail-head {
+          display: grid;
+          grid-template-columns: auto 1fr auto;
+          align-items: center;
+          gap: 14px;
+        }
+        .cb-detail-flag {
+          font-size: 40px;
+          line-height: 1;
+        }
+        .cb-detail-name strong {
+          display: block;
+          font-size: 20px;
+          font-weight: 600;
+          color: var(--text);
+          line-height: 1.2;
+        }
+        .cb-detail-name small {
+          display: block;
+          margin-top: 4px;
+          font-size: 12px;
+          color: var(--muted);
+          letter-spacing: 0.02em;
+        }
+        .cb-detail-close {
+          min-width: 44px;
+          min-height: 44px;
+          display: grid;
+          place-items: center;
+          padding: 0;
+          border-radius: 999px;
+          background: color-mix(in srgb, var(--surface2) 80%, transparent);
+          color: var(--muted);
+          border: 1px solid var(--cb-border);
+          cursor: pointer;
+          transition: background 160ms ease, color 160ms ease;
+        }
+        .cb-detail-close:hover {
+          background: var(--surface2);
+          color: var(--text);
+        }
+        .cb-detail-cta {
+          /* Full-width primary action — same colour treatment as the
+             accent-tinted toggle on the previous build, just much
+             bigger so it reads as the obvious next step. */
+          min-height: 52px;
+          padding: 0 18px;
+          border-radius: 14px;
+          font-size: 15px;
+          font-weight: 600;
+          letter-spacing: 0.01em;
+          background: var(--accent);
+          color: var(--bg);
+          border: 1px solid var(--accent);
+          cursor: pointer;
+          transition: transform 120ms ease, background 160ms ease, color 160ms ease;
+        }
+        .cb-detail-cta:active {
+          transform: scale(0.985);
+        }
+        .cb-detail-cta.is-on {
+          background: color-mix(in srgb, var(--surface2) 92%, transparent);
+          color: var(--text);
+          border-color: var(--cb-border);
+        }
+        .cb-detail-meta {
+          font-size: 13px;
+          color: var(--muted);
+          text-align: center;
+        }
 
         .cb-list {
           flex: 1 1 auto;
@@ -1045,12 +1345,15 @@ export default function Visited({ appId, token }) {
           font-size: 14px;
         }
         .cb-row {
+          /* Min-height enforces a 44px tap target without needing to
+             pad the row visually — the grid keeps content centred. */
           width: 100%;
+          min-height: 56px;
           display: grid;
           grid-template-columns: 30px 1fr auto;
           align-items: center;
           gap: 12px;
-          padding: 10px 12px;
+          padding: 8px 14px;
           margin-bottom: 6px;
           border: 1px solid transparent;
           border-radius: 14px;
@@ -1059,14 +1362,13 @@ export default function Visited({ appId, token }) {
           font: inherit;
           text-align: left;
           cursor: pointer;
-          transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
+          transition: background 160ms ease, border-color 160ms ease, transform 120ms ease;
         }
         .cb-row:hover {
           background: color-mix(in srgb, var(--surface2) 80%, transparent);
         }
-        .cb-row--selected {
-          border-color: color-mix(in srgb, var(--accent) 60%, transparent);
-          background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+        .cb-row:active {
+          transform: scale(0.995);
         }
         .cb-row-flag {
           font-size: 22px;
@@ -1083,31 +1385,26 @@ export default function Visited({ appId, token }) {
           font-size: 12px;
           color: var(--muted);
         }
-        .cb-row-pill {
-          /* iOS HIG says 44×44pt minimum. The pill is still visually a pill
-             (smaller text, rounded ends); the height comes from min-height
-             and the width from min-width + symmetric padding. */
-          min-width: 64px;
-          min-height: 44px;
-          padding: 0 14px;
+        .cb-row-badge {
+          /* Accent-tinted check — only shown when the country is visited.
+             Pure decoration; the row click opens detail where the actual
+             toggle lives. */
+          min-width: 28px;
+          height: 28px;
+          padding: 0 8px;
+          display: grid;
+          place-items: center;
           border-radius: 999px;
-          font-size: 13px;
-          font-weight: 600;
-          letter-spacing: 0.02em;
-          background: color-mix(in srgb, var(--surface2) 90%, transparent);
+          background: color-mix(in srgb, var(--accent) 18%, transparent);
+          color: var(--accent);
+          font-size: 14px;
+          font-weight: 700;
+        }
+        .cb-row-chevron {
           color: var(--muted);
-          border: 1px solid var(--cb-border);
-          cursor: pointer;
-          user-select: none;
-          transition: background 160ms ease, color 160ms ease, transform 120ms ease;
-        }
-        .cb-row-pill:active {
-          transform: scale(0.96);
-        }
-        .cb-row-pill.is-on {
-          background: var(--accent);
-          color: var(--bg);
-          border-color: var(--accent);
+          font-size: 22px;
+          line-height: 1;
+          padding-right: 4px;
         }
         .cb-row--visited .cb-row-text strong {
           color: var(--accent);
@@ -1171,7 +1468,8 @@ export default function Visited({ appId, token }) {
             visited={visited}
             selectedIso3={selectedIso3}
             focusRequest={focusRequest}
-            onTapCountry={onTapCountry}
+            onTapCountry={selectCountry}
+            onTapOcean={deselect}
           />
         )}
       </div>
@@ -1179,11 +1477,12 @@ export default function Visited({ appId, token }) {
       <BottomSheet
         countries={filteredCountries}
         visited={visited}
-        selectedIso3={selectedIso3}
+        selectedCountry={selectedCountry}
         query={query}
         onQueryChange={setQuery}
-        onSelect={onSelectFromList}
+        onSelect={selectCountry}
         onToggleVisited={toggleVisited}
+        onDeselect={deselect}
       />
     </div>
   )
