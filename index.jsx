@@ -595,7 +595,7 @@ function SyncPill({ online, pending, hasRuntime }) {
 // --------------------------------------------------------------------------
 // App root.
 // --------------------------------------------------------------------------
-export default function CountriesBeen({ appId, token }) {
+export default function Visited({ appId, token }) {
   const storage = useMemo(() => makeStorage({ appId, token }), [appId, token])
 
   const [countries, setCountries] = useState([])
@@ -647,7 +647,7 @@ export default function CountriesBeen({ appId, token }) {
         setError('')
       } catch (err) {
         // eslint-disable-next-line no-console
-        console.error('Countries Been: boot failed', err)
+        console.error('Visited:boot failed', err)
         if (active) setError('Could not load the world right now. Try again in a moment.')
       } finally {
         if (active) setLoading(false)
@@ -742,7 +742,7 @@ export default function CountriesBeen({ appId, token }) {
         })
         .catch((err) => {
           // eslint-disable-next-line no-console
-          console.error('Countries Been: save failed', err)
+          console.error('Visited:save failed', err)
           // Rollback to the pre-tap Set so on-screen state matches what's
           // actually persisted.
           setVisited(previous)
@@ -1122,7 +1122,7 @@ export default function CountriesBeen({ appId, token }) {
 
       <header className="cb-header">
         <h1>
-          <span className="cb-eyebrow">Countries Been</span>
+          <span className="cb-eyebrow">Visited</span>
           {visitedCount === 0
             ? 'Tap a country.'
             : visitedCount === 1
