@@ -173,6 +173,22 @@ function dedupeCountries(list) {
   return out
 }
 
+// d3-geo treats a polygon's interior as the side to the LEFT of its ring
+// winding. A ring wound the wrong way makes d3-geo fill the entire
+// complement — a whole-hemisphere disc. Reversing every ring flips the
+// winding back. Used by `normalizedCountries` to repair inverted features
+// (the source GeoJSON ships Bermuda's outer ring counter-clockwise).
+function reverseWinding(geometry) {
+  const flip = (rings) => rings.map((ring) => ring.slice().reverse())
+  if (geometry.type === 'Polygon') {
+    return { ...geometry, coordinates: flip(geometry.coordinates) }
+  }
+  if (geometry.type === 'MultiPolygon') {
+    return { ...geometry, coordinates: geometry.coordinates.map(flip) }
+  }
+  return geometry
+}
+
 // --------------------------------------------------------------------------
 // Globe — orthographic d3-geo projection on an SVG canvas.
 // --------------------------------------------------------------------------
@@ -333,10 +349,27 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry, o
     [setRotationBoth],
   )
 
+  // Repair inverted-winding features once d3-geo is loaded. Some source
+  // features (here: Bermuda) ship an outer ring wound the wrong way; d3-geo
+  // then fills the whole hemisphere for that feature, which both paints a
+  // giant disc AND — because each country path is the tap target — swallows
+  // every globe tap (the "tapping the globe selects Bermuda" bug). geoArea
+  // > 2π is the signature of an inverted feature; rewind it. Memoized so the
+  // ~180 area checks run once per data/d3-ready change, not per render. Used
+  // for both rendering and focus so the centroid is correct too.
+  const normalizedCountries = useMemo(() => {
+    const d3 = d3Ref.current
+    if (!d3) return countries
+    return countries.map((c) => {
+      const area = d3.geoArea({ type: 'Feature', properties: {}, geometry: c.geometry })
+      return area > 2 * Math.PI ? { ...c, geometry: reverseWinding(c.geometry) } : c
+    })
+  }, [countries, ready])
+
   // Smooth-pan when the parent asks us to focus a particular country.
   useEffect(() => {
     if (!ready || !focusRequest?.iso3 || !d3Ref.current) return
-    const country = countries.find((c) => c.iso3 === focusRequest.iso3)
+    const country = normalizedCountries.find((c) => c.iso3 === focusRequest.iso3)
     if (!country) return
     const [lng, lat] = d3Ref.current.geoCentroid({
       type: 'Feature',
@@ -344,7 +377,7 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry, o
       geometry: country.geometry,
     })
     animateTo([-lng, -lat, 0], focusRequest.duration ?? PAN_DURATION_MS)
-  }, [animateTo, countries, focusRequest, ready])
+  }, [animateTo, normalizedCountries, focusRequest, ready])
 
   // Idle spin — runs every frame except during user drag or focus pan.
   // Honors prefers-reduced-motion: vestibular users see a still globe by
@@ -613,7 +646,7 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry, o
              and hover tooltips surface the name on desktop. tabIndex and
              a keyboard handler make small-country selection reachable
              without a sub-pixel tap. */}
-          {countries.map((country) => {
+          {normalizedCountries.map((country) => {
             const d = projectionData.path({
               type: 'Feature',
               properties: {},
@@ -666,58 +699,10 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry, o
         </svg>
       )}
 
-      {/* Zoom controls — the discoverable, accessible path to the same zoom
-         that pinch/wheel drive. Buttons go disabled at the clamp bounds so
-         the limit is visible rather than a dead press. Hidden until the
-         globe is interactive (no point offering zoom over a loading state). */}
-      {projectionData ? (
-        <div className="cb-zoom" role="group" aria-label="Zoom">
-          {/* Inline SVG glyphs, matching the search/close icons elsewhere —
-             a literal "+/−" risks font-fallback tofu on some Android
-             WebViews, the same reason the search field uses an SVG. */}
-          <button
-            type="button"
-            className="cb-zoom-btn"
-            onClick={() => zoomBy(ZOOM_STEP)}
-            disabled={zoom >= MAX_ZOOM}
-            aria-label="Zoom in"
-          >
-            <svg
-              width="18"
-              height="18"
-              viewBox="0 0 18 18"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              aria-hidden="true"
-            >
-              <line x1="9" y1="4" x2="9" y2="14" />
-              <line x1="4" y1="9" x2="14" y2="9" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            className="cb-zoom-btn"
-            onClick={() => zoomBy(1 / ZOOM_STEP)}
-            disabled={zoom <= MIN_ZOOM}
-            aria-label="Zoom out"
-          >
-            <svg
-              width="18"
-              height="18"
-              viewBox="0 0 18 18"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              aria-hidden="true"
-            >
-              <line x1="4" y1="9" x2="14" y2="9" />
-            </svg>
-          </button>
-        </div>
-      ) : null}
+      {/* Zoom is driven by wheel/trackpad, pinch, and the +/- keys (see the
+         gesture handlers + onKeyDown). The on-screen +/- buttons were removed
+         so the globe surface is uncluttered — scroll/pinch to zoom is the
+         expected gesture and the keyboard path keeps it accessible. */}
     </div>
   )
 }
@@ -1574,6 +1559,16 @@ export default function Visited({ appId, token }) {
           color: var(--muted);
           font-size: 13px;
         }
+        .cb-counter-pct {
+          /* Share of the world visited. Divider + accent tint so it reads as
+             a derived stat, not another raw count. */
+          margin-left: 6px;
+          padding-left: 8px;
+          border-left: 1px solid var(--cb-border);
+          color: color-mix(in srgb, var(--accent) 85%, var(--text));
+          font-size: 13px;
+          font-weight: 600;
+        }
         /* Sync pill — sits next to the counter; hidden when synced + online
            (the common case). When pending > 0 or offline, the pill softly
            announces what state the user's writes are in. */
@@ -1623,55 +1618,26 @@ export default function Visited({ appId, token }) {
           outline: none;
         }
         .cb-globe-svg:focus-visible {
-          /* Keyboard focus only — a thin inset accent ring so +/- users can
-             see the globe is focused, without a heavy box around it for
-             pointer users. */
+          /* Keyboard focus only — a thin inset accent ring so keyboard users
+             (who pan with arrows and zoom with the +/- keys) can see the
+             globe is focused, without a heavy box around it for pointer
+             users. */
           outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
           outline-offset: -2px;
           border-radius: 12px;
         }
-        /* Zoom controls — vertical pill in the lower-right of the globe,
-           above the sheet. Same surface/border/accent language as the
-           detail-close button so it reads as part of the app, not an
-           add-on. */
-        .cb-zoom {
-          position: absolute;
-          right: 14px;
-          bottom: 16px;
-          display: flex;
-          flex-direction: column;
-          gap: 1px;
-          border-radius: 14px;
-          overflow: hidden;
-          border: 1px solid var(--cb-border);
-          background: var(--cb-border);
-          box-shadow: 0 4px 14px color-mix(in srgb, var(--text) 16%, transparent);
+        /* Each country is a focusable <g role="button"> so keyboard users can
+           reach small countries. Browsers draw a rectangular outline around
+           the focused group's bounding box — the "box around countries" the
+           user saw — so suppress it for pointer focus and instead highlight
+           the country PATH on keyboard focus (:focus-visible), keeping a11y
+           intact. */
+        .cb-globe-svg g[role='button']:focus {
+          outline: none;
         }
-        .cb-zoom-btn {
-          /* 44px tap target; the SVG glyph inherits currentColor so the
-             hover/disabled colour transitions below drive the icon too. */
-          width: 44px;
-          height: 44px;
-          display: grid;
-          place-items: center;
-          padding: 0;
-          border: 0;
-          background: var(--cb-surface-strong);
-          color: var(--text);
-          cursor: pointer;
-          transition: background 160ms ease, color 160ms ease;
-        }
-        .cb-zoom-btn:hover:not(:disabled) {
-          background: var(--surface2, var(--surface));
-          color: var(--accent);
-        }
-        .cb-zoom-btn:active:not(:disabled) {
-          background: color-mix(in srgb, var(--accent) 16%, var(--cb-surface-strong));
-        }
-        .cb-zoom-btn:disabled {
-          color: var(--muted);
-          opacity: 0.5;
-          cursor: default;
+        .cb-globe-svg g[role='button']:focus-visible .cb-country {
+          stroke: var(--accent);
+          stroke-width: 1.5;
         }
         .cb-globe-loading {
           position: absolute;
@@ -2015,10 +1981,21 @@ export default function Visited({ appId, token }) {
           <SyncPill online={online} pending={pending} hasRuntime={storage.hasRuntime()} />
           <div
             className={'cb-counter' + (offlineBoot ? ' cb-counter--faded' : '')}
-            aria-label={`${visitedCount} of ${totalCount} countries visited`}
+            aria-label={
+              totalCount > 0
+                ? `${visitedCount} of ${totalCount} countries visited, ${Math.round(
+                    (visitedCount / totalCount) * 100,
+                  )} percent`
+                : `${visitedCount} of ${totalCount} countries visited`
+            }
           >
             <strong>{visitedCount}</strong>
             <span>/ {totalCount || '…'}</span>
+            {totalCount > 0 ? (
+              <span className="cb-counter-pct">
+                {Math.round((visitedCount / totalCount) * 100)}%
+              </span>
+            ) : null}
           </div>
         </div>
       </header>
