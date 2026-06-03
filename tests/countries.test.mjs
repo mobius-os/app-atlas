@@ -20,6 +20,10 @@ execFileSync(esbuild, [
 })
 
 const {
+  CACHE_KEY,
+  LEGACY_CACHE_KEY,
+  cacheRead,
+  cacheWrite,
   orderCountriesForList,
   toggleCountryStatus,
 } = await import('./.build/index.mjs')
@@ -96,4 +100,21 @@ test('toggleCountryStatus is pure and ignores empty or unknown operations', () =
   assert.deepEqual([...empty.wishlist], ['CAN'])
   assert.deepEqual([...unknown.visited], ['USA'])
   assert.deepEqual([...unknown.wishlist], ['CAN'])
+})
+
+test('cacheRead migrates the old Visited localStorage prefix to Atlas', () => {
+  const values = new Map()
+  globalThis.localStorage = {
+    getItem: (key) => values.has(key) ? values.get(key) : null,
+    setItem: (key, value) => values.set(key, value),
+  }
+  values.set(LEGACY_CACHE_KEY('app-1', 'visited.json'), JSON.stringify(['USA', 'JPN']))
+
+  assert.deepEqual(cacheRead('app-1', 'visited.json'), ['USA', 'JPN'])
+  assert.equal(values.get(CACHE_KEY('app-1', 'visited.json')), JSON.stringify(['USA', 'JPN']))
+
+  cacheWrite('app-1', 'visited.json', ['CAN'])
+  assert.equal(values.get(CACHE_KEY('app-1', 'visited.json')), JSON.stringify(['CAN']))
+
+  delete globalThis.localStorage
 })

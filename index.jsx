@@ -125,20 +125,32 @@ const ZOOM_STEP = 1.4
 
 // localStorage cache keys — the offline runtime caches storage.get reads
 // but cold-reload-without-runtime needs *some* local mirror or the boot
-// screen shows nothing forever. We mirror visited + countries on every
+// screen shows nothing forever. We mirror atlas + countries on every
 // successful read; the boot path consults the cache first if the network
-// read returns null. Scoped by appId so two installs don't collide.
-const CACHE_KEY = (appId, name) => `visited-app:${appId}:${name}`
-function cacheRead(appId, name) {
+// read returns null. Scoped by appId so two installs don't collide. The
+// legacy `visited-app:` prefix preserves offline cache across the Visited
+// -> Atlas rename.
+export const CACHE_KEY = (appId, name) => `atlas-app:${appId}:${name}`
+export const LEGACY_CACHE_KEY = (appId, name) => `visited-app:${appId}:${name}`
+
+export function cacheRead(appId, name) {
   if (typeof localStorage === 'undefined') return null
   try {
-    const raw = localStorage.getItem(CACHE_KEY(appId, name))
-    return raw ? JSON.parse(raw) : null
+    const key = CACHE_KEY(appId, name)
+    const legacyKey = LEGACY_CACHE_KEY(appId, name)
+    const raw = localStorage.getItem(key)
+    if (raw) return JSON.parse(raw)
+    const legacyRaw = localStorage.getItem(legacyKey)
+    if (!legacyRaw) return null
+    const value = JSON.parse(legacyRaw)
+    try { localStorage.setItem(key, JSON.stringify(value)) } catch {}
+    return value
   } catch {
     return null
   }
 }
-function cacheWrite(appId, name, data) {
+
+export function cacheWrite(appId, name, data) {
   if (typeof localStorage === 'undefined') return
   try {
     localStorage.setItem(CACHE_KEY(appId, name), JSON.stringify(data))
@@ -168,7 +180,7 @@ function dedupeCountries(list) {
   }
   if (dupes.length) {
     // eslint-disable-next-line no-console
-    console.warn('Visited: dropped duplicate iso3 entries from seed', dupes)
+    console.warn('Atlas: dropped duplicate iso3 entries from seed', dupes)
   }
   return out
 }
@@ -566,7 +578,13 @@ function Globe({
     const dy = event.clientY - dragRef.current.startY
     if (Math.abs(dx) > 3 || Math.abs(dy) > 3) dragRef.current.moved = true
     const [startLng, startLat] = dragRef.current.startRotate
-    setRotationBoth([startLng + dx * 0.4, clamp(startLat - dy * 0.4, -85, 85), 0])
+    // Scale rotation by 1/zoom so a drag moves the SURFACE under the finger at
+    // a roughly constant rate regardless of zoom. A fixed deg/px over-rotates
+    // when zoomed in — the globe is bigger on screen, so the same finger travel
+    // should sweep a SMALLER angle — which is why dragging zoomed-in didn't feel
+    // like dragging the earth's surface.
+    const k = 0.4 / zoomRef.current
+    setRotationBoth([startLng + dx * k, clamp(startLat - dy * k, -85, 85), 0])
   }
 
   const finishDrag = (event) => {
@@ -1172,7 +1190,7 @@ const NAV_PUSHING = 'pushing'
 const NAV_OPEN = 'open'
 const NAV_POPPING = 'popping'
 
-export default function Visited({ appId, token }) {
+export default function Atlas({ appId, token }) {
   const storage = useMemo(() => makeStorage({ appId, token }), [appId, token])
 
   const [countries, setCountries] = useState([])
@@ -1233,7 +1251,7 @@ export default function Visited({ appId, token }) {
       setCountries(countriesList)
       if (freshCountries) cacheWrite(appId, 'countries.geo.json', freshCountries)
 
-      // Visited: prefer fresh, fall back to local cache.
+      // Visited countries: prefer fresh, fall back to local cache.
       const cachedVisited = cacheRead(appId, 'visited.json')
       const freshVisited = Array.isArray(rawVisited) ? rawVisited : null
       const visitedList = freshVisited || cachedVisited || []
@@ -1266,7 +1284,7 @@ export default function Visited({ appId, token }) {
       }
     } catch (err) {
       // eslint-disable-next-line no-console
-      console.error('Visited:boot failed', err)
+      console.error('Atlas:boot failed', err)
       setError('Could not load the world right now. Try again in a moment.')
     } finally {
       setLoading(false)
@@ -1384,7 +1402,7 @@ export default function Visited({ appId, token }) {
     installAckHandler()
     try {
       window.parent.postMessage(
-        { type: 'moebius:nav-push', label: 'visited-detail', requestId },
+        { type: 'moebius:nav-push', label: 'atlas-detail', requestId },
         window.location.origin,
       )
     } catch {
@@ -1507,7 +1525,7 @@ export default function Visited({ appId, token }) {
             storage.pendingCount().then(setPending).catch(() => {})
           } catch (err) {
             // eslint-disable-next-line no-console
-            console.error('Visited:save failed', err)
+            console.error('Atlas:save failed', err)
             // We can't safely "roll back" here because the user has likely
             // toggled OTHER countries in the meantime — restoring a stale
             // snapshot would clobber their newer taps. Instead surface an

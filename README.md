@@ -1,6 +1,6 @@
 # Atlas
 
-Tap a 3D globe to mark every country you've been to. Watch your map fill in with accent-colored glow as the count climbs toward 195. A [Möbius](https://github.com/mobius-os) mini-app.
+Tap a 3D globe to mark every country you've been to. Watch your atlas fill in with accent-colored glow as the count climbs toward 195. A [Möbius](https://github.com/mobius-os) mini-app.
 
 <!-- TODO: docs/screenshot.png after first install. -->
 <!-- TODO: icon.png — currently relying on Möbius's auto-generated letter icon. -->
@@ -16,7 +16,7 @@ Open the **App Store** mini-app in Möbius, search for "Atlas", tap **Install**.
 In the App Store, choose **Install from URL** and paste:
 
 ```
-https://raw.githubusercontent.com/mobius-os/app-countries/main/mobius.json
+https://raw.githubusercontent.com/mobius-os/app-atlas/main/mobius.json
 ```
 
 Möbius will fetch the manifest, show you the bundled GeoJSON and `d3-geo` runtime dep, and install with one tap.
