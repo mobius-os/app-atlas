@@ -1,4 +1,4 @@
-# Countries Been
+# Visited
 
 Tap a 3D globe to mark every country you've been to. Watch your map fill in with accent-colored glow as the count climbs toward 195. A [Möbius](https://github.com/mobius-os) mini-app.
 
@@ -9,7 +9,7 @@ Tap a 3D globe to mark every country you've been to. Watch your map fill in with
 
 ### Via the App Store (recommended)
 
-Open the **App Store** mini-app in Möbius, search for "Countries Been", tap **Install**.
+Open the **App Store** mini-app in Möbius, search for "Visited", tap **Install**.
 
 ### Via paste-a-URL
 

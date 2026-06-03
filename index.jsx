@@ -978,7 +978,7 @@ function BottomSheet({
               onClick={() => onToggleWishlist(selectedCountry)}
               aria-pressed={isWishlistedSelected}
             >
-              {isWishlistedSelected ? 'Want to visit' : 'Want to visit'}
+              {isWishlistedSelected ? 'Wishlisted' : 'Want to visit'}
             </button>
           </div>
 
