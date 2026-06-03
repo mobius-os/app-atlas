@@ -173,6 +173,69 @@ function dedupeCountries(list) {
   return out
 }
 
+function toIsoSet(values) {
+  if (values instanceof Set) return new Set([...values].filter(Boolean))
+  if (Array.isArray(values)) return new Set(values.filter(Boolean))
+  return new Set()
+}
+
+export function orderCountriesForList(countries, visitedValues = new Set(), wishlistValues = new Set(), query = '') {
+  if (!Array.isArray(countries)) return []
+  const visitedSet = toIsoSet(visitedValues)
+  const wishlistSet = toIsoSet(wishlistValues)
+  const text = soften(query)
+  const rank = (country) => {
+    if (visitedSet.has(country?.iso3)) return 0
+    if (wishlistSet.has(country?.iso3)) return 1
+    return 2
+  }
+  return countries
+    .filter((country) => {
+      if (!country || typeof country !== 'object') return false
+      if (!text) return true
+      return [
+        country.displayName,
+        country.name,
+        country.region,
+        country.subregion,
+        country.iso2,
+        country.iso3,
+      ]
+        .filter(Boolean)
+        .some((value) => soften(value).includes(text))
+    })
+    .sort((a, b) => {
+      const ar = rank(a)
+      const br = rank(b)
+      if (ar !== br) return ar - br
+      const an = String(a.displayName || a.name || a.iso3 || '')
+      const bn = String(b.displayName || b.name || b.iso3 || '')
+      const nameOrder = an.localeCompare(bn)
+      if (nameOrder !== 0) return nameOrder
+      return String(a.iso3 || '').localeCompare(String(b.iso3 || ''))
+    })
+}
+
+export function toggleCountryStatus(visitedValues, wishlistValues, iso3, status) {
+  const visitedSet = toIsoSet(visitedValues)
+  const wishlistSet = toIsoSet(wishlistValues)
+  if (!iso3) return { visited: visitedSet, wishlist: wishlistSet }
+  if (status === 'visited') {
+    if (visitedSet.has(iso3)) visitedSet.delete(iso3)
+    else {
+      visitedSet.add(iso3)
+      wishlistSet.delete(iso3)
+    }
+  } else if (status === 'wishlist') {
+    if (wishlistSet.has(iso3)) wishlistSet.delete(iso3)
+    else {
+      wishlistSet.add(iso3)
+      visitedSet.delete(iso3)
+    }
+  }
+  return { visited: visitedSet, wishlist: wishlistSet }
+}
+
 // d3-geo treats a polygon's interior as the side to the LEFT of its ring
 // winding. A ring wound the wrong way makes d3-geo fill the entire
 // complement — a whole-hemisphere disc. Reversing every ring flips the
@@ -1253,34 +1316,7 @@ export default function Visited({ appId, token }) {
 
   // ----- derived list (filtered + sorted) ------------------------------
   const filteredCountries = useMemo(() => {
-    const text = soften(query)
-    return countries
-      .filter((country) => {
-        if (!text) return true
-        return [
-          country.displayName,
-          country.name,
-          country.region,
-          country.subregion,
-          country.iso2,
-          country.iso3,
-        ]
-          .filter(Boolean)
-          .some((value) => soften(value).includes(text))
-      })
-      .sort((a, b) => {
-        // Visited countries first, then places the user wants to visit,
-        // then everything else. Each group remains alphabetical.
-        const rank = (country) => {
-          if (visited.has(country.iso3)) return 0
-          if (wishlist.has(country.iso3)) return 1
-          return 2
-        }
-        const ar = rank(a)
-        const br = rank(b)
-        if (ar !== br) return ar - br
-        return a.displayName.localeCompare(b.displayName)
-      })
+    return orderCountriesForList(countries, visited, wishlist, query)
   }, [countries, query, visited, wishlist])
 
   const visitedCount = visited.size
@@ -1495,13 +1531,12 @@ export default function Visited({ appId, token }) {
     (country) => {
       if (!country) return
       setError('')
-      const nextVisited = new Set(latestVisitedRef.current)
-      const nextWishlist = new Set(latestWishlistRef.current)
-      if (nextVisited.has(country.iso3)) nextVisited.delete(country.iso3)
-      else {
-        nextVisited.add(country.iso3)
-        nextWishlist.delete(country.iso3)
-      }
+      const { visited: nextVisited, wishlist: nextWishlist } = toggleCountryStatus(
+        latestVisitedRef.current,
+        latestWishlistRef.current,
+        country.iso3,
+        'visited',
+      )
       latestVisitedRef.current = nextVisited
       latestWishlistRef.current = nextWishlist
       setVisited(nextVisited)
@@ -1515,13 +1550,12 @@ export default function Visited({ appId, token }) {
     (country) => {
       if (!country) return
       setError('')
-      const nextVisited = new Set(latestVisitedRef.current)
-      const nextWishlist = new Set(latestWishlistRef.current)
-      if (nextWishlist.has(country.iso3)) nextWishlist.delete(country.iso3)
-      else {
-        nextWishlist.add(country.iso3)
-        nextVisited.delete(country.iso3)
-      }
+      const { visited: nextVisited, wishlist: nextWishlist } = toggleCountryStatus(
+        latestVisitedRef.current,
+        latestWishlistRef.current,
+        country.iso3,
+        'wishlist',
+      )
       latestVisitedRef.current = nextVisited
       latestWishlistRef.current = nextWishlist
       setVisited(nextVisited)
