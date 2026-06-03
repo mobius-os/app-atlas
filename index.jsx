@@ -192,7 +192,15 @@ function reverseWinding(geometry) {
 // --------------------------------------------------------------------------
 // Globe — orthographic d3-geo projection on an SVG canvas.
 // --------------------------------------------------------------------------
-function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry, onTapOcean }) {
+function Globe({
+  countries,
+  visited,
+  wishlist,
+  selectedIso3,
+  focusRequest,
+  onTapCountry,
+  onTapOcean,
+}) {
   const containerRef = useRef(null)
   const d3Ref = useRef(null)
   const animationRef = useRef(0)
@@ -654,9 +662,12 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry, o
             })
             if (!d) return null
             const isVisited = visited.has(country.iso3)
+            const isWishlisted = wishlist.has(country.iso3)
             const isSelected = country.iso3 === selectedIso3
             const label = isVisited
               ? `${country.displayName} — visited`
+              : isWishlisted
+                ? `${country.displayName} — want to visit`
               : country.displayName
             return (
               <g
@@ -681,6 +692,7 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry, o
                   className={
                     'cb-country' +
                     (isVisited ? ' cb-country--visited' : '') +
+                    (isWishlisted ? ' cb-country--wishlist' : '') +
                     (isSelected ? ' cb-country--selected' : '')
                   }
                   vectorEffect="non-scaling-stroke"
@@ -711,23 +723,24 @@ function Globe({ countries, visited, selectedIso3, focusRequest, onTapCountry, o
 // Bottom sheet — vertically draggable list + search.
 // --------------------------------------------------------------------------
 const SHEET_MIN = 0.30  // 30% of viewport — collapsed
+const SHEET_DETAIL_LOW = 0.32 // 32% — detail default, keeps the globe dominant
 const SHEET_MID = 0.50  // 50% — neutral
 const SHEET_MAX = 0.80  // 80% — expanded
 const SHEET_STOPS_DEFAULT = [SHEET_MIN, SHEET_MID, SHEET_MAX]
-// When a country is selected the primary CTA must stay above the fold —
-// we forbid the collapsed stop and require at least MID. (Closing the
-// sheet to 30% with the detail visible hid "Mark visited" off-screen,
-// which read as "the button is gone".)
-const SHEET_STOPS_DETAIL = [SHEET_MID, SHEET_MAX]
+// The detail view starts low so the globe keeps visual priority, while
+// still exposing the name and status actions above the fold.
+const SHEET_STOPS_DETAIL = [SHEET_DETAIL_LOW, SHEET_MID, SHEET_MAX]
 
 function BottomSheet({
   countries,
   visited,
+  wishlist,
   selectedCountry,
   query,
   onQueryChange,
   onSelect,
   onToggleVisited,
+  onToggleWishlist,
   onDeselect,
 }) {
   const dragRef = useRef({ active: false, startY: 0, startFrac: SHEET_MID, fromBody: false })
@@ -735,15 +748,15 @@ function BottomSheet({
   const [dragging, setDragging] = useState(false)
   const scrollRef = useRef(null)
 
-  const minFrac = selectedCountry ? SHEET_MID : SHEET_MIN
+  const minFrac = selectedCountry ? SHEET_DETAIL_LOW : SHEET_MIN
   const stops = selectedCountry ? SHEET_STOPS_DETAIL : SHEET_STOPS_DEFAULT
 
-  // When a country is selected, raise the sheet to MID so the detail view
-  // has enough room. Don't shrink an already-MAX sheet — the user may have
-  // expanded it for the list and we shouldn't snap it down underneath them.
+  // When a country is selected, default to the low detail stop so the globe
+  // keeps most of the viewport. Don't shrink an already-MAX sheet — the
+  // user may have expanded it for the list.
   useEffect(() => {
-    if (selectedCountry && frac < SHEET_MID) {
-      setFrac(SHEET_MID)
+    if (selectedCountry && frac < SHEET_MAX) {
+      setFrac(SHEET_DETAIL_LOW)
     }
     // We deliberately don't react when frac changes — this effect only
     // fires when selection appears/disappears.
@@ -832,6 +845,7 @@ function BottomSheet({
   }
 
   const isVisitedSelected = selectedCountry && visited.has(selectedCountry.iso3)
+  const isWishlistedSelected = selectedCountry && wishlist.has(selectedCountry.iso3)
 
   return (
     <div
@@ -886,19 +900,31 @@ function BottomSheet({
             </button>
           </div>
 
-          <button
-            type="button"
-            className={'cb-detail-cta' + (isVisitedSelected ? ' is-on' : '')}
-            onClick={() => onToggleVisited(selectedCountry)}
-            aria-pressed={isVisitedSelected}
-          >
-            {isVisitedSelected ? 'Mark not visited' : 'Mark visited'}
-          </button>
+          <div className="cb-detail-actions">
+            <button
+              type="button"
+              className={'cb-detail-cta cb-detail-cta--visited' + (isVisitedSelected ? ' is-on' : '')}
+              onClick={() => onToggleVisited(selectedCountry)}
+              aria-pressed={isVisitedSelected}
+            >
+              {isVisitedSelected ? 'Visited' : 'Mark visited'}
+            </button>
+            <button
+              type="button"
+              className={'cb-detail-cta cb-detail-cta--wishlist' + (isWishlistedSelected ? ' is-on' : '')}
+              onClick={() => onToggleWishlist(selectedCountry)}
+              aria-pressed={isWishlistedSelected}
+            >
+              {isWishlistedSelected ? 'Want to visit' : 'Want to visit'}
+            </button>
+          </div>
 
           <div className="cb-detail-meta">
             {isVisitedSelected
               ? 'In your visited list.'
-              : 'Tap above to add it to your visited list.'}
+              : isWishlistedSelected
+                ? 'Saved as a place you want to visit.'
+                : 'Choose a status for this country.'}
           </div>
         </div>
       ) : (
@@ -970,13 +996,18 @@ function BottomSheet({
             ) : (
               countries.map((country) => {
                 const isVisited = visited.has(country.iso3)
+                const isWishlisted = wishlist.has(country.iso3)
                 return (
                   <div
                     key={country.iso3}
                     role="button"
                     tabIndex={0}
                     aria-label={`Open ${country.displayName}`}
-                    className={'cb-row' + (isVisited ? ' cb-row--visited' : '')}
+                    className={
+                      'cb-row' +
+                      (isVisited ? ' cb-row--visited' : '') +
+                      (isWishlisted ? ' cb-row--wishlist' : '')
+                    }
                     onClick={() => onSelect(country)}
                     onKeyDown={(event) => {
                       if (event.key === 'Enter' || event.key === ' ') {
@@ -995,13 +1026,13 @@ function BottomSheet({
                         {country.subregion ? ` · ${country.subregion}` : ''}
                       </small>
                     </span>
-                    {isVisited ? (
+                    {isVisited || isWishlisted ? (
                       <span
-                        className="cb-row-badge"
-                        aria-label="Visited"
-                        title="Visited"
+                        className={'cb-row-badge' + (isWishlisted ? ' cb-row-badge--wishlist' : '')}
+                        aria-label={isVisited ? 'Visited' : 'Want to visit'}
+                        title={isVisited ? 'Visited' : 'Want to visit'}
                       >
-                        ✓
+                        {isVisited ? '✓' : '·'}
                       </span>
                     ) : (
                       <span className="cb-row-chevron" aria-hidden="true">
@@ -1083,6 +1114,7 @@ export default function Visited({ appId, token }) {
 
   const [countries, setCountries] = useState([])
   const [visited, setVisited] = useState(() => new Set())
+  const [wishlist, setWishlist] = useState(() => new Set())
   const [selectedIso3, setSelectedIso3] = useState('')
   const [query, setQuery] = useState('')
   const [focusRequest, setFocusRequest] = useState(null)
@@ -1119,14 +1151,17 @@ export default function Visited({ appId, token }) {
       // still want to keep the side that succeeded (Promise.all discards
       // both on any failure, which used to wipe the visited list when the
       // countries fetch hiccupped).
-      const [countriesResult, visitedResult] = await Promise.allSettled([
+      const [countriesResult, visitedResult, wishlistResult] = await Promise.allSettled([
         storage.get('countries.geo.json'),
         storage.get('visited.json'),
+        storage.get('wishlist.json'),
       ])
       const rawCountries =
         countriesResult.status === 'fulfilled' ? countriesResult.value : null
       const rawVisited =
         visitedResult.status === 'fulfilled' ? visitedResult.value : null
+      const rawWishlist =
+        wishlistResult.status === 'fulfilled' ? wishlistResult.value : null
 
       // Countries: prefer fresh, fall back to local cache, dedupe by iso3.
       const cachedCountries = cacheRead(appId, 'countries.geo.json')
@@ -1139,8 +1174,17 @@ export default function Visited({ appId, token }) {
       const cachedVisited = cacheRead(appId, 'visited.json')
       const freshVisited = Array.isArray(rawVisited) ? rawVisited : null
       const visitedList = freshVisited || cachedVisited || []
-      setVisited(new Set(visitedList))
+      const cachedWishlist = cacheRead(appId, 'wishlist.json')
+      const freshWishlist = Array.isArray(rawWishlist) ? rawWishlist : null
+      const wishlistList = freshWishlist || cachedWishlist || []
+      const nextVisited = new Set(visitedList)
+      const nextWishlist = new Set(wishlistList.filter((iso3) => !nextVisited.has(iso3)))
+      setVisited(nextVisited)
+      setWishlist(nextWishlist)
+      latestVisitedRef.current = nextVisited
+      latestWishlistRef.current = nextWishlist
       if (freshVisited) cacheWrite(appId, 'visited.json', freshVisited)
+      if (freshWishlist) cacheWrite(appId, 'wishlist.json', Array.from(nextWishlist))
       setHasCachedVisited((freshVisited || cachedVisited || []).length > 0)
 
       // If we ended up with zero countries AND the network is offline, the
@@ -1225,14 +1269,19 @@ export default function Visited({ appId, token }) {
           .some((value) => soften(value).includes(text))
       })
       .sort((a, b) => {
-        // Visited countries float to the top so the user's collection is
-        // always the first thing they see.
-        const av = visited.has(a.iso3) ? 1 : 0
-        const bv = visited.has(b.iso3) ? 1 : 0
-        if (av !== bv) return bv - av
+        // Visited countries first, then places the user wants to visit,
+        // then everything else. Each group remains alphabetical.
+        const rank = (country) => {
+          if (visited.has(country.iso3)) return 0
+          if (wishlist.has(country.iso3)) return 1
+          return 2
+        }
+        const ar = rank(a)
+        const br = rank(b)
+        if (ar !== br) return ar - br
         return a.displayName.localeCompare(b.displayName)
       })
-  }, [countries, query, visited])
+  }, [countries, query, visited, wishlist])
 
   const visitedCount = visited.size
   const totalCount = countries.length
@@ -1385,14 +1434,18 @@ export default function Visited({ appId, token }) {
   // to fire parallel PUTs; tap B could land before tap A, then A's
   // rollback wiped B's correct value (or vice versa). We now serialize
   // PUTs through a single in-flight Promise — every save waits its turn.
-  // Pending writes coalesce on the LATEST visited Set (last-writer-wins),
+  // Pending writes coalesce on the LATEST visited/wishlist Sets (last-writer-wins),
   // which is exactly the "merge multiple taps into one PUT" behaviour
   // the user expects when they're rapid-firing through Europe.
   const saveChainRef = useRef(Promise.resolve())
   const latestVisitedRef = useRef(visited)
+  const latestWishlistRef = useRef(wishlist)
   useEffect(() => {
     latestVisitedRef.current = visited
   }, [visited])
+  useEffect(() => {
+    latestWishlistRef.current = wishlist
+  }, [wishlist])
   // Coalesce flag — if multiple taps land while one PUT is in flight, we
   // only kick off ONE follow-up PUT (using the latest visited Set) when
   // the in-flight one settles.
@@ -1408,10 +1461,13 @@ export default function Visited({ appId, token }) {
         .catch(() => {}) // swallow prior errors so the chain keeps moving
         .then(async () => {
           pendingSaveRef.current = false
-          const snapshot = Array.from(latestVisitedRef.current)
+          const visitedSnapshot = Array.from(latestVisitedRef.current)
+          const wishlistSnapshot = Array.from(latestWishlistRef.current)
           try {
-            await storage.set('visited.json', snapshot)
-            cacheWrite(appId, 'visited.json', snapshot)
+            await storage.set('visited.json', visitedSnapshot)
+            await storage.set('wishlist.json', wishlistSnapshot)
+            cacheWrite(appId, 'visited.json', visitedSnapshot)
+            cacheWrite(appId, 'wishlist.json', wishlistSnapshot)
             storage.pendingCount().then(setPending).catch(() => {})
           } catch (err) {
             // eslint-disable-next-line no-console
@@ -1439,28 +1495,52 @@ export default function Visited({ appId, token }) {
     (country) => {
       if (!country) return
       setError('')
-      setVisited((current) => {
-        const next = new Set(current)
-        if (next.has(country.iso3)) next.delete(country.iso3)
-        else next.add(country.iso3)
-        return next
-      })
+      const nextVisited = new Set(latestVisitedRef.current)
+      const nextWishlist = new Set(latestWishlistRef.current)
+      if (nextVisited.has(country.iso3)) nextVisited.delete(country.iso3)
+      else {
+        nextVisited.add(country.iso3)
+        nextWishlist.delete(country.iso3)
+      }
+      latestVisitedRef.current = nextVisited
+      latestWishlistRef.current = nextWishlist
+      setVisited(nextVisited)
+      setWishlist(nextWishlist)
       queueSave(country)
     },
     [queueSave],
   )
 
-  // Tap on globe OR list row — select + pan + open detail view. NEVER
+  const toggleWishlist = useCallback(
+    (country) => {
+      if (!country) return
+      setError('')
+      const nextVisited = new Set(latestVisitedRef.current)
+      const nextWishlist = new Set(latestWishlistRef.current)
+      if (nextWishlist.has(country.iso3)) nextWishlist.delete(country.iso3)
+      else {
+        nextWishlist.add(country.iso3)
+        nextVisited.delete(country.iso3)
+      }
+      latestVisitedRef.current = nextVisited
+      latestWishlistRef.current = nextWishlist
+      setVisited(nextVisited)
+      setWishlist(nextWishlist)
+      queueSave(country)
+    },
+    [queueSave],
+  )
+
+  // Tap on globe OR list row — select + open detail view. NEVER
   // toggles. The detail view's primary CTA is the only path to commit
   // a visited/not-visited change.
   const selectCountry = useCallback(
     (country) => {
       if (!country) return
       setSelectedIso3(country.iso3)
-      focusCountry(country)
       navPush()
     },
-    [focusCountry, navPush],
+    [navPush],
   )
 
   const selectedCountry = useMemo(
@@ -1495,6 +1575,10 @@ export default function Visited({ appId, token }) {
              define the deeper surface token. */
           --cb-surface-strong: color-mix(in srgb, var(--surface2, var(--surface)) 92%, transparent);
           --cb-border: var(--border);
+          --cb-visited-fill: color-mix(in srgb, var(--accent) 88%, var(--text) 12%);
+          --cb-wishlist: color-mix(in srgb, var(--accent) 58%, var(--text) 42%);
+          --cb-wishlist-fill: color-mix(in srgb, var(--cb-wishlist) 72%, transparent);
+          --cb-selected-fill: color-mix(in srgb, var(--accent) 42%, transparent);
           position: fixed;
           inset: 0;
           display: flex;
@@ -1666,7 +1750,7 @@ export default function Visited({ appId, token }) {
           fill: color-mix(in srgb, var(--text) 26%, transparent);
         }
         .cb-country--visited {
-          fill: var(--accent);
+          fill: var(--cb-visited-fill);
           /* Stroke previously mixed accent with literal "white", which
              vanished the outline on light themes. Mix with --bg so the
              border keeps separation from the ocean in every theme. */
@@ -1676,12 +1760,15 @@ export default function Visited({ appId, token }) {
             drop-shadow(0 0 4px color-mix(in srgb, var(--accent) 70%, transparent))
             drop-shadow(0 0 10px color-mix(in srgb, var(--accent) 40%, transparent));
         }
+        .cb-country--wishlist {
+          fill: var(--cb-wishlist-fill);
+          stroke: color-mix(in srgb, var(--cb-wishlist) 50%, var(--bg));
+          stroke-width: 0.6;
+        }
         .cb-country--selected {
-          /* Theme-derived outline: high-contrast mix of --text against
-             --bg so the selected ring stays visible in both light and
-             dark themes (pure white disappears on a pale background). */
-          stroke: color-mix(in srgb, var(--text) 88%, var(--bg));
-          stroke-width: 1.6;
+          fill: var(--cb-selected-fill);
+          stroke-width: 0;
+          filter: url(#cb-glow);
         }
 
         .cb-error {
@@ -1844,28 +1931,35 @@ export default function Visited({ appId, token }) {
           color: var(--text);
         }
         .cb-detail-cta {
-          /* Full-width primary action — same colour treatment as the
-             accent-tinted toggle on the previous build, just much
-             bigger so it reads as the obvious next step. */
-          min-height: 52px;
-          padding: 0 18px;
+          min-height: 44px;
+          padding: 0 14px;
           border-radius: 14px;
           font-size: 15px;
           font-weight: 600;
           letter-spacing: 0.01em;
-          background: var(--accent);
-          color: var(--bg);
-          border: 1px solid var(--accent);
+          background: color-mix(in srgb, var(--surface2, var(--surface)) 88%, transparent);
+          color: var(--text);
+          border: 1px solid var(--cb-border);
           cursor: pointer;
           transition: transform 120ms ease, background 160ms ease, color 160ms ease;
+        }
+        .cb-detail-actions {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+          gap: 10px;
         }
         .cb-detail-cta:active {
           transform: scale(0.985);
         }
-        .cb-detail-cta.is-on {
-          background: color-mix(in srgb, var(--surface2, var(--surface)) 92%, transparent);
-          color: var(--text);
-          border-color: var(--cb-border);
+        .cb-detail-cta--visited.is-on {
+          background: var(--accent);
+          color: var(--bg);
+          border-color: var(--accent);
+        }
+        .cb-detail-cta--wishlist.is-on {
+          background: var(--cb-wishlist);
+          color: var(--bg);
+          border-color: var(--cb-wishlist);
         }
         .cb-detail-meta {
           font-size: 13px;
@@ -1943,6 +2037,10 @@ export default function Visited({ appId, token }) {
           font-size: 14px;
           font-weight: 700;
         }
+        .cb-row-badge--wishlist {
+          background: color-mix(in srgb, var(--cb-wishlist) 18%, transparent);
+          color: var(--cb-wishlist);
+        }
         .cb-row-chevron {
           color: var(--muted);
           font-size: 22px;
@@ -1951,6 +2049,13 @@ export default function Visited({ appId, token }) {
         }
         .cb-row--visited .cb-row-text strong {
           color: var(--accent);
+        }
+        .cb-row--wishlist {
+          border-color: color-mix(in srgb, var(--cb-wishlist) 22%, transparent);
+          background: color-mix(in srgb, var(--cb-wishlist) 8%, var(--surface));
+        }
+        .cb-row--wishlist .cb-row-text strong {
+          color: var(--cb-wishlist);
         }
 
         @media (min-height: 760px) {
@@ -2021,6 +2126,7 @@ export default function Visited({ appId, token }) {
           <Globe
             countries={countries}
             visited={visited}
+            wishlist={wishlist}
             selectedIso3={selectedIso3}
             focusRequest={focusRequest}
             onTapCountry={selectCountry}
@@ -2032,11 +2138,13 @@ export default function Visited({ appId, token }) {
       <BottomSheet
         countries={filteredCountries}
         visited={visited}
+        wishlist={wishlist}
         selectedCountry={selectedCountry}
         query={query}
         onQueryChange={setQuery}
         onSelect={selectCountry}
         onToggleVisited={toggleVisited}
+        onToggleWishlist={toggleWishlist}
         onDeselect={deselect}
       />
     </div>
