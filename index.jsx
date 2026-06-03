@@ -2109,7 +2109,7 @@ export default function Visited({ appId, token }) {
 
       <header className="cb-header">
         <h1>
-          <span className="cb-eyebrow">Visited</span>
+          <span className="cb-eyebrow">Atlas</span>
           {visitedCount === 0
             ? 'Tap a country.'
             : visitedCount === 1

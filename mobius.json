@@ -1,11 +1,11 @@
 {
   "id": "countries",
-  "name": "Visited",
+  "name": "Atlas",
   "version": "1.6.1",
   "description": "Spin and zoom the globe, tap a country, mark it visited. Watch your map fill up as the count climbs.",
   "author": "mobius-os",
   "license": "MIT",
-  "homepage": "https://github.com/mobius-os/app-countries",
+  "homepage": "https://github.com/mobius-os/app-atlas",
   "entry": "index.jsx",
   "icon": "icon.png",
   "offline_capable": true,
