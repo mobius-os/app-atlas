@@ -92,6 +92,69 @@ const soften = (value) => String(value || '').toLowerCase().trim()
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value))
 const cubicOut = (t) => 1 - Math.pow(1 - t, 3)
 
+// Versor (unit-quaternion) helpers for "grab the surface" dragging. A fixed
+// deg/px drag can't track the surface: on an orthographic globe the same
+// finger travel sweeps a different angle depending on zoom, viewport size,
+// and where on the sphere you grabbed (the limb foreshortens). Versor maths
+// solves the rotation that carries the point first grabbed to the point now
+// under the pointer, so the surface stays glued to the finger everywhere.
+// Ported from Mike Bostock's `versor` (ISC) — kept inline so the app needs no
+// extra runtime dep beyond d3-geo (which is already gated for offline).
+const DEG2RAD = Math.PI / 180
+const RAD2DEG = 180 / Math.PI
+// [lng, lat]° → unit vector on the sphere.
+const versorCartesian = (e) => {
+  const l = e[0] * DEG2RAD
+  const p = e[1] * DEG2RAD
+  const cp = Math.cos(p)
+  return [cp * Math.cos(l), cp * Math.sin(l), Math.sin(p)]
+}
+// Euler rotation [λ, φ, γ]° → quaternion.
+const versorFromAngles = (e) => {
+  const l = (e[0] / 2) * DEG2RAD
+  const sl = Math.sin(l)
+  const cl = Math.cos(l)
+  const p = (e[1] / 2) * DEG2RAD
+  const sp = Math.sin(p)
+  const cp = Math.cos(p)
+  const g = (e[2] / 2) * DEG2RAD
+  const sg = Math.sin(g)
+  const cg = Math.cos(g)
+  return [
+    cl * cp * cg + sl * sp * sg,
+    sl * cp * cg - cl * sp * sg,
+    cl * sp * cg + sl * cp * sg,
+    cl * cp * sg - sl * sp * cg,
+  ]
+}
+// Quaternion → Euler rotation [λ, φ, γ]°.
+const versorToAngles = (q) => [
+  Math.atan2(2 * (q[0] * q[1] + q[2] * q[3]), 1 - 2 * (q[1] * q[1] + q[2] * q[2])) * RAD2DEG,
+  Math.asin(Math.max(-1, Math.min(1, 2 * (q[0] * q[2] - q[3] * q[1])))) * RAD2DEG,
+  Math.atan2(2 * (q[0] * q[3] + q[1] * q[2]), 1 - 2 * (q[2] * q[2] + q[3] * q[3])) * RAD2DEG,
+]
+// Quaternion of the shortest rotation carrying unit vector v0 → v1.
+const versorDelta = (v0, v1) => {
+  const w = [
+    v0[1] * v1[2] - v0[2] * v1[1],
+    v0[2] * v1[0] - v0[0] * v1[2],
+    v0[0] * v1[1] - v0[1] * v1[0],
+  ]
+  const l = Math.sqrt(w[0] * w[0] + w[1] * w[1] + w[2] * w[2])
+  if (!l) return [1, 0, 0, 0]
+  const dot = v0[0] * v1[0] + v0[1] * v1[1] + v0[2] * v1[2]
+  const t = Math.acos(Math.max(-1, Math.min(1, dot))) / 2
+  const s = Math.sin(t)
+  return [Math.cos(t), (w[2] / l) * s, (-w[1] / l) * s, (w[0] / l) * s]
+}
+// Hamilton product q0·q1 (compose two rotations).
+const versorMultiply = (q0, q1) => [
+  q0[0] * q1[0] - q0[1] * q1[1] - q0[2] * q1[2] - q0[3] * q1[3],
+  q0[0] * q1[1] + q0[1] * q1[0] + q0[2] * q1[3] - q0[3] * q1[2],
+  q0[0] * q1[2] - q0[1] * q1[3] + q0[2] * q1[0] + q0[3] * q1[1],
+  q0[0] * q1[3] + q0[1] * q1[2] - q0[2] * q1[1] + q0[3] * q1[0],
+]
+
 // Pixel distance between the first two live pointers in a pointer Map. The
 // pinch gesture is driven entirely by how this distance changes, so it
 // lives in one named place rather than inline in the move handler.
@@ -529,6 +592,10 @@ function Globe({
       startX: pointer.x,
       startY: pointer.y,
       startRotate: rotationRef.current.slice(),
+      // Re-grab the versor baseline on the next move (see onPointerMove).
+      v0: null,
+      q0: null,
+      offSphere: false,
     }
   }
 
@@ -555,6 +622,12 @@ function Globe({
         startX: event.clientX,
         startY: event.clientY,
         startRotate: rotationRef.current.slice(),
+        // Versor baseline (grab point as a unit vector + the rotation-at-grab
+        // as a quaternion) is captured on the first move, once we have the
+        // pointer's position relative to the SVG.
+        v0: null,
+        q0: null,
+        offSphere: false,
       }
     }
   }
@@ -577,14 +650,65 @@ function Globe({
     const dx = event.clientX - dragRef.current.startX
     const dy = event.clientY - dragRef.current.startY
     if (Math.abs(dx) > 3 || Math.abs(dy) > 3) dragRef.current.moved = true
-    const [startLng, startLat] = dragRef.current.startRotate
-    // Scale rotation by 1/zoom so a drag moves the SURFACE under the finger at
-    // a roughly constant rate regardless of zoom. A fixed deg/px over-rotates
-    // when zoomed in — the globe is bigger on screen, so the same finger travel
-    // should sweep a SMALLER angle — which is why dragging zoomed-in didn't feel
-    // like dragging the earth's surface.
-    const k = 0.4 / zoomRef.current
-    setRotationBoth([startLng + dx * k, clamp(startLat - dy * k, -85, 85), 0])
+
+    // Versor drag: solve the rotation that carries the point first grabbed to
+    // the point now under the pointer, so the surface stays glued to the finger
+    // at any zoom, viewport, and latitude. (A fixed deg/px slips — the same
+    // finger travel sweeps a different angle as the on-screen radius and the
+    // limb foreshortening change, which is why dragging never felt like the
+    // earth's surface.) Falls back to a radius-scaled deg/px when d3 isn't
+    // ready or the grab/pointer lands off the sphere.
+    const d3 = d3Ref.current
+    const drag = dragRef.current
+    if (d3 && projectionData && !drag.offSphere) {
+      const rect = event.currentTarget.getBoundingClientRect()
+      const px = event.clientX - rect.left
+      const py = event.clientY - rect.top
+      const projectionAt = (rot) =>
+        d3
+          .geoOrthographic()
+          .translate([size.width / 2, size.height / 2])
+          .scale(projectionData.radius)
+          .clipAngle(90)
+          .rotate(rot)
+      // Capture the grab baseline on the first move of the gesture (and after
+      // a pinch hands control back). A grab that lands off the sphere marks the
+      // gesture linear so we stop retrying the invert.
+      if (!drag.v0) {
+        const grab = projectionAt(rotationRef.current).invert([px, py])
+        if (grab && Number.isFinite(grab[0]) && Number.isFinite(grab[1])) {
+          drag.startRotate = rotationRef.current.slice()
+          drag.v0 = versorCartesian(grab)
+          drag.q0 = versorFromAngles(drag.startRotate)
+        } else {
+          drag.offSphere = true
+        }
+      }
+      if (drag.v0) {
+        const here = projectionAt(drag.startRotate).invert([px, py])
+        if (here && Number.isFinite(here[0]) && Number.isFinite(here[1])) {
+          const q = versorMultiply(drag.q0, versorDelta(drag.v0, versorCartesian(here)))
+          const [lng, lat] = versorToAngles(q)
+          // Keep north up (zero roll, clamp the pole): idle spin and
+          // country-focus both assume an upright axis, and a free-tilting
+          // globe reads as broken in a country picker.
+          setRotationBoth([lng, clamp(lat, -85, 85), 0])
+        }
+        // Pointer past the limb this frame → hold the last good rotation.
+        return
+      }
+    }
+
+    // Fallback: radius-scaled deg/px — exact at the globe centre for any zoom
+    // and viewport. Used while d3 loads, or when the grab was off the sphere
+    // (e.g. on the surrounding glow), where versor has no anchor.
+    const degPerPx = projectionData ? RAD2DEG / projectionData.radius : 0.4 / zoomRef.current
+    const [startLng, startLat] = drag.startRotate
+    setRotationBoth([
+      startLng + dx * degPerPx,
+      clamp(startLat - dy * degPerPx, -85, 85),
+      0,
+    ])
   }
 
   const finishDrag = (event) => {
