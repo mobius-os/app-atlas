@@ -600,6 +600,7 @@ function Globe({
   }
 
   const onPointerDown = (event) => {
+    event.currentTarget.blur?.()
     cancelAnimationFrame(animationRef.current)
     animationRef.current = 0
     pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY })
@@ -880,7 +881,8 @@ function Globe({
                 role="button"
                 tabIndex={0}
                 aria-label={label}
-                onClick={() => {
+                onClick={(event) => {
+                  event.currentTarget.blur?.()
                   if (dragRef.current.moved) return
                   onTapCountry(country)
                 }}
@@ -1729,13 +1731,12 @@ export default function Atlas({ appId, token }) {
     <div className="cb-app">
       <style>{`
         .cb-app {
-          /* Ocean palette is theme-derived so the globe reads as a globe in
-             every theme. The base is var(--bg) shaded toward var(--text)
-             (so it darkens against light bgs and lifts against dark bgs);
-             accent provides the cool tint. */
-          --cb-ocean-1: color-mix(in srgb, var(--accent) 28%, color-mix(in srgb, var(--bg) 70%, var(--text) 30%));
-          --cb-ocean-2: color-mix(in srgb, var(--accent) 14%, color-mix(in srgb, var(--bg) 55%, var(--text) 45%));
-          --cb-ocean-3: color-mix(in srgb, var(--bg) 40%, var(--text) 60%);
+          /* Ocean palette keeps a stable atlas identity while mixing in the
+             active theme background so standalone installs and shell embeds
+             do not feel like different apps. */
+          --cb-ocean-1: color-mix(in srgb, #4e91a4 70%, var(--bg) 30%);
+          --cb-ocean-2: color-mix(in srgb, #245f72 78%, var(--bg) 22%);
+          --cb-ocean-3: color-mix(in srgb, #102f3a 86%, var(--bg) 14%);
           /* Specular shine — a soft highlight. Mixing with literal white
              read OK on dark themes but flat-out vanished into the page on
              light ones; mix toward --bg so the highlight sits one shade
@@ -1751,10 +1752,14 @@ export default function Atlas({ appId, token }) {
              define the deeper surface token. */
           --cb-surface-strong: color-mix(in srgb, var(--surface2, var(--surface)) 92%, transparent);
           --cb-border: var(--border);
-          --cb-visited-fill: color-mix(in srgb, var(--accent) 88%, var(--text) 12%);
-          --cb-wishlist: color-mix(in srgb, var(--accent) 58%, var(--text) 42%);
-          --cb-wishlist-fill: color-mix(in srgb, var(--cb-wishlist) 72%, transparent);
-          --cb-selected-fill: color-mix(in srgb, var(--accent) 42%, transparent);
+          --cb-land-fill: color-mix(in srgb, #d7c49a 72%, var(--surface) 28%);
+          --cb-land-hover: color-mix(in srgb, #e5d4aa 78%, var(--text) 22%);
+          --cb-land-stroke: color-mix(in srgb, #24333b 74%, var(--bg) 26%);
+          --cb-visited-fill: color-mix(in srgb, #f1b15f 82%, var(--accent) 18%);
+          --cb-visited-stroke: color-mix(in srgb, #ffdfa5 76%, var(--bg) 24%);
+          --cb-wishlist: color-mix(in srgb, #62b6a5 70%, var(--accent) 30%);
+          --cb-wishlist-fill: color-mix(in srgb, var(--cb-wishlist) 82%, var(--cb-land-fill) 18%);
+          --cb-selected-stroke: color-mix(in srgb, #ffffff 82%, var(--accent) 18%);
           position: fixed;
           inset: 0;
           display: flex;
@@ -1771,6 +1776,7 @@ export default function Atlas({ appId, token }) {
           display: flex;
           align-items: baseline;
           justify-content: space-between;
+          gap: 12px;
           padding: 14px 18px 8px;
           flex-shrink: 0;
         }
@@ -1779,6 +1785,8 @@ export default function Atlas({ appId, token }) {
           font-size: 18px;
           letter-spacing: 0.01em;
           color: var(--text);
+          min-width: 0;
+          line-height: 1.15;
         }
         .cb-header h1 span.cb-eyebrow {
           display: block;
@@ -1793,6 +1801,7 @@ export default function Atlas({ appId, token }) {
           display: inline-flex;
           align-items: center;
           gap: 8px;
+          flex: 0 0 auto;
         }
         .cb-counter {
           display: inline-flex;
@@ -1800,7 +1809,7 @@ export default function Atlas({ appId, token }) {
           gap: 4px;
           padding: 6px 12px;
           border-radius: 999px;
-          background: var(--cb-surface);
+          background: color-mix(in srgb, var(--cb-surface) 88%, var(--bg) 12%);
           border: 1px solid var(--cb-border);
           font-variant-numeric: tabular-nums;
           transition: opacity 200ms ease;
@@ -1882,8 +1891,8 @@ export default function Atlas({ appId, token }) {
              (who pan with arrows and zoom with the +/- keys) can see the
              globe is focused, without a heavy box around it for pointer
              users. */
-          outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
-          outline-offset: -2px;
+          outline: none;
+          box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 64%, transparent);
           border-radius: 12px;
         }
         /* Each country is a focusable <g role="button"> so keyboard users can
@@ -1916,35 +1925,38 @@ export default function Atlas({ appId, token }) {
           padding-top: 28%;
         }
         .cb-country {
-          fill: color-mix(in srgb, var(--text) 18%, transparent);
-          stroke: color-mix(in srgb, var(--text) 30%, transparent);
-          stroke-width: 0.5;
-          transition: fill 200ms ease, filter 200ms ease;
+          fill: var(--cb-land-fill);
+          stroke: var(--cb-land-stroke);
+          stroke-width: 0.62;
+          opacity: 0.96;
+          transition: fill 180ms ease, stroke 180ms ease, filter 180ms ease;
           cursor: pointer;
         }
         .cb-country:hover {
-          fill: color-mix(in srgb, var(--text) 26%, transparent);
+          fill: var(--cb-land-hover);
         }
         .cb-country--visited {
           fill: var(--cb-visited-fill);
           /* Stroke previously mixed accent with literal "white", which
              vanished the outline on light themes. Mix with --bg so the
              border keeps separation from the ocean in every theme. */
-          stroke: color-mix(in srgb, var(--accent) 60%, var(--bg));
-          stroke-width: 0.6;
+          stroke: var(--cb-visited-stroke);
+          stroke-width: 0.74;
           filter:
-            drop-shadow(0 0 4px color-mix(in srgb, var(--accent) 70%, transparent))
-            drop-shadow(0 0 10px color-mix(in srgb, var(--accent) 40%, transparent));
+            drop-shadow(0 0 3px color-mix(in srgb, #f1b15f 58%, transparent))
+            drop-shadow(0 0 8px color-mix(in srgb, #102f3a 44%, transparent));
         }
         .cb-country--wishlist {
           fill: var(--cb-wishlist-fill);
-          stroke: color-mix(in srgb, var(--cb-wishlist) 50%, var(--bg));
-          stroke-width: 0.6;
+          stroke: color-mix(in srgb, var(--cb-wishlist) 70%, var(--bg) 30%);
+          stroke-width: 0.74;
         }
         .cb-country--selected {
-          fill: var(--cb-selected-fill);
-          stroke-width: 0;
-          filter: url(#cb-glow);
+          stroke: var(--cb-selected-stroke);
+          stroke-width: 1.45;
+          filter:
+            drop-shadow(0 0 3px color-mix(in srgb, #ffffff 68%, transparent))
+            drop-shadow(0 0 9px color-mix(in srgb, #102f3a 46%, transparent));
         }
 
         .cb-error {
@@ -2247,6 +2259,21 @@ export default function Atlas({ appId, token }) {
             padding: 18px 24px 10px;
           }
         }
+        @media (max-width: 430px) {
+          .cb-header {
+            align-items: center;
+            padding: 12px 14px 8px;
+          }
+          .cb-header h1 {
+            font-size: 16px;
+          }
+          .cb-counter {
+            padding: 5px 9px;
+          }
+          .cb-counter-pct {
+            display: none;
+          }
+        }
       `}</style>
 
       <header className="cb-header">
@@ -2255,7 +2282,7 @@ export default function Atlas({ appId, token }) {
           {visitedCount === 0
             ? 'Tap a country.'
             : visitedCount === 1
-            ? '1 down, the rest of the world to go.'
+            ? 'First stamp.'
             : `${visitedCount} stamps on the map.`}
         </h1>
         <div className="cb-header-meta">
