@@ -22,8 +22,10 @@ execFileSync(esbuild, [
 const {
   CACHE_KEY,
   LEGACY_CACHE_KEY,
+  ROTATION_SINGULARITY_LAT,
   cacheRead,
   cacheWrite,
+  nextDragRotation,
   orderCountriesForList,
   toggleCountryStatus,
 } = await import('./.build/index.mjs')
@@ -100,6 +102,16 @@ test('toggleCountryStatus is pure and ignores empty or unknown operations', () =
   assert.deepEqual([...empty.wishlist], ['CAN'])
   assert.deepEqual([...unknown.visited], ['USA'])
   assert.deepEqual([...unknown.wishlist], ['CAN'])
+})
+
+test('nextDragRotation clamps at the pole but still lets the user drag back out', () => {
+  assert.deepEqual(nextDragRotation([0, 0, 0], 12, 90), [
+    12,
+    ROTATION_SINGULARITY_LAT,
+    0,
+  ])
+  assert.equal(nextDragRotation([12, ROTATION_SINGULARITY_LAT, 0], 18, 90), null)
+  assert.deepEqual(nextDragRotation([12, ROTATION_SINGULARITY_LAT, 0], 18, 80), [18, 80, 0])
 })
 
 test('cacheRead migrates the old Visited localStorage prefix to Atlas', () => {

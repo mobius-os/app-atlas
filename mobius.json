@@ -1,7 +1,7 @@
 {
   "id": "atlas",
   "name": "Atlas",
-  "version": "1.6.2",
+  "version": "1.6.3",
   "description": "Spin and zoom the globe, tap a country, mark it visited. Watch your atlas fill up as the count climbs.",
   "author": "mobius-os",
   "license": "MIT",

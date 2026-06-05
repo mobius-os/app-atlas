@@ -171,6 +171,7 @@ const INITIAL_ROTATION = [12, -22, 0]
 // previous 0.035 deg/frame at 60Hz.
 const IDLE_SPIN_DEG_PER_SEC = 2.1
 const PAN_DURATION_MS = 950
+export const ROTATION_SINGULARITY_LAT = 84.5
 
 // Zoom — a multiplier on the size-derived base radius (1 = the default
 // "fits the canvas" globe). Kept as a multiplier, not an absolute pixel
@@ -185,6 +186,16 @@ const MAX_ZOOM = 6
 // 1.4× per step ≈ 5 presses to cross the whole range, which feels like
 // "a few taps" rather than a slow crawl.
 const ZOOM_STEP = 1.4
+
+const isRotationSingular = (rotation) => Math.abs(rotation?.[1] || 0) >= ROTATION_SINGULARITY_LAT
+const clampDragLatitude = (lat) => clamp(lat, -ROTATION_SINGULARITY_LAT, ROTATION_SINGULARITY_LAT)
+export const nextDragRotation = (current, lng, lat) => {
+  const nextLat = clampDragLatitude(lat)
+  if (isRotationSingular(current) && Math.abs(nextLat) >= ROTATION_SINGULARITY_LAT) {
+    return null
+  }
+  return [lng, nextLat, 0]
+}
 
 // localStorage cache keys — the offline runtime caches storage.get reads
 // but cold-reload-without-runtime needs *some* local mirror or the boot
@@ -446,7 +457,8 @@ function Globe({
   // caller has to remember the bounds, then writes the ref (read by gesture
   // handlers) and state (drives the projection) together.
   const setZoomBoth = useCallback((next) => {
-    const clamped = clamp(next, MIN_ZOOM, MAX_ZOOM)
+    const safe = Number.isFinite(next) && next > 0 ? next : zoomRef.current
+    const clamped = clamp(safe, MIN_ZOOM, MAX_ZOOM)
     zoomRef.current = clamped
     setZoom(clamped)
   }, [])
@@ -456,7 +468,10 @@ function Globe({
   // the same whether you're zoomed in or out, and so it stays symmetric:
   // factor f then 1/f returns you exactly where you started.
   const zoomBy = useCallback(
-    (factor) => setZoomBoth(zoomRef.current * factor),
+    (factor) => {
+      if (!Number.isFinite(factor) || factor <= 0) return
+      setZoomBoth(zoomRef.current * factor)
+    },
     [setZoomBoth],
   )
 
@@ -690,10 +705,12 @@ function Globe({
         if (here && Number.isFinite(here[0]) && Number.isFinite(here[1])) {
           const q = versorMultiply(drag.q0, versorDelta(drag.v0, versorCartesian(here)))
           const [lng, lat] = versorToAngles(q)
+          const next = nextDragRotation(rotationRef.current, lng, lat)
+          if (!next) return
           // Keep north up (zero roll, clamp the pole): idle spin and
           // country-focus both assume an upright axis, and a free-tilting
           // globe reads as broken in a country picker.
-          setRotationBoth([lng, clamp(lat, -85, 85), 0])
+          setRotationBoth(next)
         }
         // Pointer past the limb this frame → hold the last good rotation.
         return
@@ -705,11 +722,8 @@ function Globe({
     // (e.g. on the surrounding glow), where versor has no anchor.
     const degPerPx = projectionData ? RAD2DEG / projectionData.radius : 0.4 / zoomRef.current
     const [startLng, startLat] = drag.startRotate
-    setRotationBoth([
-      startLng + dx * degPerPx,
-      clamp(startLat - dy * degPerPx, -85, 85),
-      0,
-    ])
+    const next = nextDragRotation(rotationRef.current, startLng + dx * degPerPx, startLat - dy * degPerPx)
+    if (next) setRotationBoth(next)
   }
 
   const finishDrag = (event) => {
@@ -759,7 +773,9 @@ function Globe({
   // touchAction:none on the SVG already stops the page from scrolling under
   // a trackpad pinch.
   const onWheel = (event) => {
-    zoomBy(Math.exp(-event.deltaY * 0.0015))
+    event.preventDefault()
+    const delta = clamp(event.deltaY || 0, -600, 600)
+    zoomBy(Math.exp(-delta * 0.0015))
   }
 
   // Keyboard zoom — +/- (and =, the unshifted +) when the globe has focus.
@@ -912,7 +928,7 @@ function Globe({
           <path
             d={projectionData.path({ type: 'Sphere' })}
             fill="url(#cb-shine)"
-            opacity="0.5"
+            opacity="0.18"
             pointerEvents="none"
           />
         </svg>
@@ -930,13 +946,9 @@ function Globe({
 // Bottom sheet — vertically draggable list + search.
 // --------------------------------------------------------------------------
 const SHEET_MIN = 0.30  // 30% of viewport — collapsed
-const SHEET_DETAIL_LOW = 0.32 // 32% — detail default, keeps the globe dominant
 const SHEET_MID = 0.50  // 50% — neutral
 const SHEET_MAX = 0.80  // 80% — expanded
 const SHEET_STOPS_DEFAULT = [SHEET_MIN, SHEET_MID, SHEET_MAX]
-// The detail view starts low so the globe keeps visual priority, while
-// still exposing the name and status actions above the fold.
-const SHEET_STOPS_DETAIL = [SHEET_DETAIL_LOW, SHEET_MID, SHEET_MAX]
 
 function BottomSheet({
   countries,
@@ -955,20 +967,8 @@ function BottomSheet({
   const [dragging, setDragging] = useState(false)
   const scrollRef = useRef(null)
 
-  const minFrac = selectedCountry ? SHEET_DETAIL_LOW : SHEET_MIN
-  const stops = selectedCountry ? SHEET_STOPS_DETAIL : SHEET_STOPS_DEFAULT
-
-  // When a country is selected, default to the low detail stop so the globe
-  // keeps most of the viewport. Don't shrink an already-MAX sheet — the
-  // user may have expanded it for the list.
-  useEffect(() => {
-    if (selectedCountry && frac < SHEET_MAX) {
-      setFrac(SHEET_DETAIL_LOW)
-    }
-    // We deliberately don't react when frac changes — this effect only
-    // fires when selection appears/disappears.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCountry])
+  const minFrac = SHEET_MIN
+  const stops = SHEET_STOPS_DEFAULT
 
   // Drag math reused by both the handle and the body. dragRef.startFrac
   // captures the sheet height at gesture start; dy is converted to a
@@ -989,10 +989,11 @@ function BottomSheet({
   const moveDrag = (event) => {
     if (!dragRef.current.active) return
     const dy = event.clientY - dragRef.current.startY
-    const vh =
+    const rawVh =
       (typeof window !== 'undefined' && window.visualViewport?.height) ||
       window.innerHeight ||
       800
+    const vh = Number.isFinite(rawVh) && rawVh > 120 ? rawVh : 800
     // Drag up = sheet grows = frac increases. dy is positive downward.
     const next = clamp(dragRef.current.startFrac - dy / vh, minFrac, SHEET_MAX)
     setFrac(next)
@@ -1004,8 +1005,7 @@ function BottomSheet({
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
     // Snap to the nearest legal stop so the sheet always rests in a known
-    // pose. The legal stop set depends on whether a country is selected
-    // (detail mode forbids the collapsed stop).
+    // pose, preserving the user's chosen height across list/detail modes.
     setFrac((current) => {
       let best = stops[0]
       let bestDist = Infinity
@@ -1124,14 +1124,6 @@ function BottomSheet({
             >
               {isWishlistedSelected ? 'Wishlisted' : 'Want to visit'}
             </button>
-          </div>
-
-          <div className="cb-detail-meta">
-            {isVisitedSelected
-              ? 'In your visited list.'
-              : isWishlistedSelected
-                ? 'Saved as a place you want to visit.'
-                : 'Choose a status for this country.'}
           </div>
         </div>
       ) : (
@@ -1482,18 +1474,37 @@ export default function Atlas({ appId, token }) {
   const closeRequestedRef = useRef(false)
   const pendingRequestIdRef = useRef('')
   const ackHandlerRef = useRef(null)
+  const ackTimerRef = useRef(0)
+
+  const clearPendingAck = useCallback(() => {
+    if (ackTimerRef.current) {
+      clearTimeout(ackTimerRef.current)
+      ackTimerRef.current = 0
+    }
+    if (ackHandlerRef.current) {
+      window.removeEventListener('message', ackHandlerRef.current)
+      ackHandlerRef.current = null
+    }
+    pendingRequestIdRef.current = ''
+  }, [])
 
   const installAckHandler = useCallback(() => {
     if (typeof window === 'undefined') return
     if (ackHandlerRef.current) return // already installed
     const handler = (event) => {
       if (event.origin !== window.location.origin) return
+      if (event.source !== window.parent) return
       if (!pendingRequestIdRef.current) return
       if (event.data?.requestId !== pendingRequestIdRef.current) return
-      if (event.data.type !== 'moebius:nav-push-ack') return
-      pendingRequestIdRef.current = ''
-      window.removeEventListener('message', handler)
-      ackHandlerRef.current = null
+      if (event.data.type !== 'moebius:nav-push-ack' && event.data.type !== 'moebius:nav-push-rejected') return
+      const accepted = event.data.type === 'moebius:nav-push-ack'
+      clearPendingAck()
+      if (!accepted) {
+        navStateRef.current = NAV_IDLE
+        closeRequestedRef.current = false
+        setSelectedIso3('')
+        return
+      }
       // ACK landed. What we do depends on whether the user already closed.
       if (navStateRef.current === NAV_PUSHING && closeRequestedRef.current) {
         // User closed before the ACK. Auto-pop so the back-stack stays
@@ -1516,16 +1527,24 @@ export default function Atlas({ appId, token }) {
     }
     window.addEventListener('message', handler)
     ackHandlerRef.current = handler
-  }, [])
+  }, [clearPendingAck])
 
   const navPush = useCallback(() => {
-    if (typeof window === 'undefined' || !window.parent) return
+    if (typeof window === 'undefined' || !window.parent || window.parent === window) return
     if (navStateRef.current !== NAV_IDLE) return
     const requestId = `visited-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     pendingRequestIdRef.current = requestId
     closeRequestedRef.current = false
     navStateRef.current = NAV_PUSHING
     installAckHandler()
+    ackTimerRef.current = window.setTimeout(() => {
+      clearPendingAck()
+      if (navStateRef.current === NAV_PUSHING) {
+        navStateRef.current = NAV_IDLE
+        closeRequestedRef.current = false
+        setSelectedIso3('')
+      }
+    }, 5000)
     try {
       window.parent.postMessage(
         { type: 'moebius:nav-push', label: 'atlas-detail', requestId },
@@ -1533,14 +1552,11 @@ export default function Atlas({ appId, token }) {
       )
     } catch {
       // No shell — clear pending so we don't sit in PUSHING forever.
-      pendingRequestIdRef.current = ''
+      clearPendingAck()
       navStateRef.current = NAV_IDLE
-      if (ackHandlerRef.current) {
-        window.removeEventListener('message', ackHandlerRef.current)
-        ackHandlerRef.current = null
-      }
+      setSelectedIso3('')
     }
-  }, [installAckHandler])
+  }, [clearPendingAck, installAckHandler])
 
   const navPop = useCallback(() => {
     if (typeof window === 'undefined' || !window.parent) return
@@ -1574,6 +1590,7 @@ export default function Atlas({ appId, token }) {
     if (typeof window === 'undefined') return undefined
     const onMessage = (event) => {
       if (event.origin !== window.location.origin) return
+      if (event.source !== window.parent) return
       if (event.data?.type === 'moebius:nav-back') {
         navStateRef.current = NAV_IDLE
         closeRequestedRef.current = false
@@ -1592,6 +1609,10 @@ export default function Atlas({ appId, token }) {
       if (ackHandlerRef.current) {
         window.removeEventListener('message', ackHandlerRef.current)
         ackHandlerRef.current = null
+      }
+      if (ackTimerRef.current) {
+        clearTimeout(ackTimerRef.current)
+        ackTimerRef.current = 0
       }
       if (navStateRef.current === NAV_OPEN || navStateRef.current === NAV_PUSHING) {
         try {
@@ -1734,17 +1755,17 @@ export default function Atlas({ appId, token }) {
           /* Ocean palette keeps a stable atlas identity while mixing in the
              active theme background so standalone installs and shell embeds
              do not feel like different apps. */
-          --cb-ocean-1: color-mix(in srgb, #4e91a4 70%, var(--bg) 30%);
-          --cb-ocean-2: color-mix(in srgb, #245f72 78%, var(--bg) 22%);
-          --cb-ocean-3: color-mix(in srgb, #102f3a 86%, var(--bg) 14%);
+          --cb-ocean-1: color-mix(in srgb, #3f8cff 88%, var(--bg) 12%);
+          --cb-ocean-2: color-mix(in srgb, #1764c7 92%, var(--bg) 8%);
+          --cb-ocean-3: color-mix(in srgb, #0b2f73 94%, var(--bg) 6%);
           /* Specular shine — a soft highlight. Mixing with literal white
              read OK on dark themes but flat-out vanished into the page on
              light ones; mix toward --bg so the highlight sits one shade
              lighter than the underlying surface in every theme. The
              accent tint keeps the globe feeling planet-shaped rather
              than just paler-than-its-frame. */
-          --cb-shine-1: color-mix(in srgb, var(--bg) 70%, var(--accent) 30%);
-          --cb-shine-2: color-mix(in srgb, var(--bg) 10%, transparent);
+          --cb-shine-1: color-mix(in srgb, #ffffff 38%, transparent);
+          --cb-shine-2: color-mix(in srgb, #ffffff 12%, transparent);
           --cb-shine-3: transparent;
           --cb-surface: color-mix(in srgb, var(--surface) 82%, transparent);
           /* --surface2 isn't guaranteed by every Möbius theme; fall back
@@ -1755,11 +1776,12 @@ export default function Atlas({ appId, token }) {
           --cb-land-fill: color-mix(in srgb, #d7c49a 72%, var(--surface) 28%);
           --cb-land-hover: color-mix(in srgb, #e5d4aa 78%, var(--text) 22%);
           --cb-land-stroke: color-mix(in srgb, #24333b 74%, var(--bg) 26%);
-          --cb-visited-fill: color-mix(in srgb, #f1b15f 82%, var(--accent) 18%);
-          --cb-visited-stroke: color-mix(in srgb, #ffdfa5 76%, var(--bg) 24%);
-          --cb-wishlist: color-mix(in srgb, #62b6a5 70%, var(--accent) 30%);
+          --cb-visited-fill: color-mix(in srgb, #27ae60 88%, var(--cb-land-fill) 12%);
+          --cb-visited-stroke: color-mix(in srgb, #d9ffe7 72%, var(--bg) 28%);
+          --cb-wishlist: color-mix(in srgb, #f39c12 88%, var(--cb-land-fill) 12%);
           --cb-wishlist-fill: color-mix(in srgb, var(--cb-wishlist) 82%, var(--cb-land-fill) 18%);
-          --cb-selected-stroke: color-mix(in srgb, #ffffff 82%, var(--accent) 18%);
+          --cb-selected-stroke: color-mix(in srgb, var(--text) 72%, var(--cb-land-fill) 28%);
+          --cb-active-cta-text: #101820;
           position: fixed;
           inset: 0;
           display: flex;
@@ -1887,26 +1909,14 @@ export default function Atlas({ appId, token }) {
           outline: none;
         }
         .cb-globe-svg:focus-visible {
-          /* Keyboard focus only — a thin inset accent ring so keyboard users
-             (who pan with arrows and zoom with the +/- keys) can see the
-             globe is focused, without a heavy box around it for pointer
-             users. */
           outline: none;
-          box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 64%, transparent);
-          border-radius: 12px;
         }
-        /* Each country is a focusable <g role="button"> so keyboard users can
-           reach small countries. Browsers draw a rectangular outline around
-           the focused group's bounding box — the "box around countries" the
-           user saw — so suppress it for pointer focus and instead highlight
-           the country PATH on keyboard focus (:focus-visible), keeping a11y
-           intact. */
         .cb-globe-svg g[role='button']:focus {
           outline: none;
         }
         .cb-globe-svg g[role='button']:focus-visible .cb-country {
-          stroke: var(--accent);
-          stroke-width: 1.5;
+          stroke: var(--cb-selected-stroke);
+          stroke-width: 1.1;
         }
         .cb-globe-loading {
           position: absolute;
@@ -1928,7 +1938,7 @@ export default function Atlas({ appId, token }) {
           fill: var(--cb-land-fill);
           stroke: var(--cb-land-stroke);
           stroke-width: 0.62;
-          opacity: 0.96;
+          opacity: 1;
           transition: fill 180ms ease, stroke 180ms ease, filter 180ms ease;
           cursor: pointer;
         }
@@ -1943,7 +1953,7 @@ export default function Atlas({ appId, token }) {
           stroke: var(--cb-visited-stroke);
           stroke-width: 0.74;
           filter:
-            drop-shadow(0 0 3px color-mix(in srgb, #f1b15f 58%, transparent))
+            drop-shadow(0 0 3px color-mix(in srgb, #27ae60 58%, transparent))
             drop-shadow(0 0 8px color-mix(in srgb, #102f3a 44%, transparent));
         }
         .cb-country--wishlist {
@@ -1953,10 +1963,7 @@ export default function Atlas({ appId, token }) {
         }
         .cb-country--selected {
           stroke: var(--cb-selected-stroke);
-          stroke-width: 1.45;
-          filter:
-            drop-shadow(0 0 3px color-mix(in srgb, #ffffff 68%, transparent))
-            drop-shadow(0 0 9px color-mix(in srgb, #102f3a 46%, transparent));
+          stroke-width: 0.9;
         }
 
         .cb-error {
@@ -2140,21 +2147,15 @@ export default function Atlas({ appId, token }) {
           transform: scale(0.985);
         }
         .cb-detail-cta--visited.is-on {
-          background: var(--accent);
-          color: var(--bg);
-          border-color: var(--accent);
+          background: var(--cb-visited-fill);
+          color: var(--cb-active-cta-text);
+          border-color: var(--cb-visited-fill);
         }
         .cb-detail-cta--wishlist.is-on {
           background: var(--cb-wishlist);
-          color: var(--bg);
+          color: var(--cb-active-cta-text);
           border-color: var(--cb-wishlist);
         }
-        .cb-detail-meta {
-          font-size: 13px;
-          color: var(--muted);
-          text-align: center;
-        }
-
         .cb-list {
           flex: 1 1 auto;
           min-height: 0;
@@ -2220,8 +2221,8 @@ export default function Atlas({ appId, token }) {
           display: grid;
           place-items: center;
           border-radius: 999px;
-          background: color-mix(in srgb, var(--accent) 18%, transparent);
-          color: var(--accent);
+          background: color-mix(in srgb, var(--cb-visited-fill) 20%, transparent);
+          color: var(--cb-visited-fill);
           font-size: 14px;
           font-weight: 700;
         }
@@ -2236,7 +2237,7 @@ export default function Atlas({ appId, token }) {
           padding-right: 4px;
         }
         .cb-row--visited .cb-row-text strong {
-          color: var(--accent);
+          color: var(--cb-visited-fill);
         }
         .cb-row--wishlist {
           border-color: color-mix(in srgb, var(--cb-wishlist) 22%, transparent);
