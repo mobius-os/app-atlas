@@ -1376,13 +1376,34 @@ export default function Atlas({ appId, token }) {
       const cachedWishlist = cacheRead(appId, 'wishlist.json')
       const freshWishlist = Array.isArray(rawWishlist) ? rawWishlist : null
       const wishlistList = freshWishlist || cachedWishlist || []
-      const nextVisited = new Set(visitedList)
-      const nextWishlist = new Set(wishlistList.filter((iso3) => !nextVisited.has(iso3)))
+      let nextVisited = new Set(visitedList)
+      let nextWishlist = new Set(wishlistList.filter((iso3) => !nextVisited.has(iso3)))
+      // Don't clobber in-progress offline toggles. If the runtime outbox
+      // still has unsynced writes (pendingCount > 0), the server copy we
+      // just read is older than the user's local taps — replacing state
+      // with it would wipe visited/wishlist toggles made while offline.
+      // Union the server set with the local in-progress sets instead, with
+      // visited winning over wishlist (the same exclusivity the toggles use).
+      let unsynced = 0
+      try {
+        unsynced = await storage.pendingCount()
+      } catch {
+        unsynced = 0
+      }
+      if (unsynced > 0) {
+        nextVisited = new Set([...nextVisited, ...latestVisitedRef.current])
+        nextWishlist = new Set(
+          [...nextWishlist, ...latestWishlistRef.current].filter((iso3) => !nextVisited.has(iso3)),
+        )
+      }
       setVisited(nextVisited)
       setWishlist(nextWishlist)
       latestVisitedRef.current = nextVisited
       latestWishlistRef.current = nextWishlist
-      if (freshVisited) cacheWrite(appId, 'visited.json', freshVisited)
+      // Mirror the state we actually set (the unioned set when we preserved
+      // in-progress toggles), not the raw server copy — otherwise the next
+      // cold start would read a cache that's missing the offline toggles.
+      if (freshVisited) cacheWrite(appId, 'visited.json', Array.from(nextVisited))
       if (freshWishlist) cacheWrite(appId, 'wishlist.json', Array.from(nextWishlist))
       setHasCachedVisited((freshVisited || cachedVisited || []).length > 0)
 
