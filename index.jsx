@@ -521,9 +521,31 @@ function Globe({
   const normalizedCountries = useMemo(() => {
     const d3 = d3Ref.current
     if (!d3) return countries
+    const FULL_SPHERE = 2 * Math.PI
+    const areaOf = (geometry) =>
+      d3.geoArea({ type: 'Feature', properties: {}, geometry })
     return countries.map((c) => {
-      const area = d3.geoArea({ type: 'Feature', properties: {}, geometry: c.geometry })
-      return area > 2 * Math.PI ? { ...c, geometry: reverseWinding(c.geometry) } : c
+      let geometry = c.geometry
+      // A single corrupt sub-polygon — a near-zero-area / degenerate ring —
+      // makes d3-geo report the WHOLE feature as spanning >2π; it then fills the
+      // entire front hemisphere and (each country path being its own tap target)
+      // swallows every globe tap. A real country sub-polygon never spans more
+      // than a hemisphere on its own, so drop any that does. Guards the render
+      // against bad dataset geometry (a rebuild once shipped such a ring for
+      // Russia) without discarding the whole country.
+      if (geometry?.type === 'MultiPolygon' && Array.isArray(geometry.coordinates)) {
+        const kept = geometry.coordinates.filter(
+          (poly) => areaOf({ type: 'Polygon', coordinates: poly }) <= FULL_SPHERE
+        )
+        if (kept.length && kept.length !== geometry.coordinates.length) {
+          geometry = { ...geometry, coordinates: kept }
+        }
+      }
+      // Genuine inverted winding (e.g. Bermuda) still fills the hemisphere after
+      // the drop above; rewind the whole feature so d3 fills its interior.
+      return areaOf(geometry) > FULL_SPHERE
+        ? { ...c, geometry: reverseWinding(geometry) }
+        : { ...c, geometry }
     })
   }, [countries, ready])
 
@@ -704,7 +726,16 @@ function Globe({
         const here = projectionAt(drag.startRotate).invert([px, py])
         if (here && Number.isFinite(here[0]) && Number.isFinite(here[1])) {
           const q = versorMultiply(drag.q0, versorDelta(drag.v0, versorCartesian(here)))
-          const [lng, lat] = versorToAngles(q)
+          const [lng, lat, roll] = versorToAngles(q)
+          // Past a pole the versor decode folds latitude back down (asin's
+          // [-90,90] range) and the roll flips toward ±180° — the globe then
+          // appears to reverse and spin the wrong way. A large roll means the
+          // drag tried to cross the pole; hold the last good rotation so the
+          // vertical drag stays bounded by the N/S poles (the upright feel the
+          // picker wants) instead of flipping past them. nextDragRotation's
+          // ±84.5 clamp can't catch this because the folded latitude lands back
+          // inside the clamp band.
+          if (Math.abs(roll) > 90) return
           const next = nextDragRotation(rotationRef.current, lng, lat)
           if (!next) return
           // Keep north up (zero roll, clamp the pole): idle spin and
