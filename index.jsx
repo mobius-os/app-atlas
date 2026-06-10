@@ -372,6 +372,9 @@ function Globe({
   // that knows "how many fingers are down".
   const pointersRef = useRef(new Map())
   const zoomRef = useRef(1)
+  // lastTapRef tracks the previous tap for double-tap zoom detection.
+  // { ts: DOMHighResTimeStamp, x: number, y: number }
+  const lastTapRef = useRef(null)
   const [size, setSize] = useState({ width: 0, height: 0 })
   const [rotation, setRotation] = useState(INITIAL_ROTATION.slice())
   // zoom is a multiplier on the base radius; see MIN_ZOOM/MAX_ZOOM. Held in
@@ -781,6 +784,31 @@ function Globe({
     }
     if (pointersRef.current.size > 0) return // other fingers still down
     dragRef.current.active = false
+
+    // Double-tap zoom: two taps within 350ms and 40 CSS px zoom in by
+    // ZOOM_STEP. This runs before the deferred moved=false reset, so
+    // a double-tap's second tap reads moved=false (the first tap cleared
+    // it) and the check below fires. After calling zoomBy we set
+    // moved=true so the subsequent onClick on the country path is silently
+    // swallowed — the user tapped twice to zoom, not to open a country.
+    if (!dragRef.current.moved && event.pointerType === 'touch') {
+      const now = performance.now()
+      const cx = event.clientX
+      const cy = event.clientY
+      const last = lastTapRef.current
+      if (
+        last &&
+        now - last.ts < 350 &&
+        Math.hypot(cx - last.x, cy - last.y) < 40
+      ) {
+        zoomBy(ZOOM_STEP)
+        lastTapRef.current = null
+        dragRef.current.moved = true // swallow the country onClick
+      } else {
+        lastTapRef.current = { ts: now, x: cx, y: cy }
+      }
+    }
+
     // Defer the moved flag so onClick (which fires after pointerup) still
     // sees moved=true and skips the tap when the user was dragging.
     setTimeout(() => {
@@ -1339,6 +1367,562 @@ const NAV_PUSHING = 'pushing'
 const NAV_OPEN = 'open'
 const NAV_POPPING = 'popping'
 
+// ----------------------------------------------------------------- styles ---
+
+const CSS = `
+/* mobius-ui:NativeTouch v1 — keep in sync; library candidate. Diverge below the marker only. */
+* { -webkit-tap-highlight-color: transparent; }
+.cb-sheet-handle, .cb-detail-cta, .cb-detail-close, .cb-sheet-search-clear, .cb-row {
+  touch-action: manipulation;
+}
+.cb-header, .cb-counter, .cb-pill, .cb-detail-flag, .cb-row-flag {
+  user-select: none; -webkit-user-select: none;
+}
+.cb-detail-close:active { transform: scale(0.94); }
+.cb-list { overscroll-behavior: contain; }
+.cb-detail { overscroll-behavior: contain; }
+.cb-sheet-search input { font-size: 16px; }
+@media (hover: hover) {
+  .cb-country:hover { fill: var(--cb-land-hover); }
+  .cb-row:hover {
+    background: color-mix(in srgb, var(--surface2, var(--surface)) 80%, transparent);
+  }
+  .cb-sheet-search-clear:hover { color: var(--text); }
+  .cb-detail-close:hover {
+    background: var(--surface2, var(--surface));
+    color: var(--text);
+  }
+}
+/* /mobius-ui:NativeTouch */
+
+/* mobius-ui:Root v1 — keep in sync; library candidate. Diverge below the marker only. */
+.cb-app {
+  /* Ocean palette keeps a stable atlas identity while mixing in the
+     active theme background so standalone installs and shell embeds
+     do not feel like different apps. */
+  --cb-ocean-1: color-mix(in srgb, #3f8cff 88%, var(--bg) 12%);
+  --cb-ocean-2: color-mix(in srgb, #1764c7 92%, var(--bg) 8%);
+  --cb-ocean-3: color-mix(in srgb, #0b2f73 94%, var(--bg) 6%);
+  /* Specular shine — a soft highlight. Mixing with literal white
+     read OK on dark themes but flat-out vanished into the page on
+     light ones; mix toward --bg so the highlight sits one shade
+     lighter than the underlying surface in every theme. The
+     accent tint keeps the globe feeling planet-shaped rather
+     than just paler-than-its-frame. */
+  --cb-shine-1: color-mix(in srgb, #ffffff 38%, transparent);
+  --cb-shine-2: color-mix(in srgb, #ffffff 12%, transparent);
+  --cb-shine-3: transparent;
+  --cb-surface: color-mix(in srgb, var(--surface) 82%, transparent);
+  /* --surface2 isn't guaranteed by every Möbius theme; fall back
+     to --surface so the sheet stays solid on themes that don't
+     define the deeper surface token. */
+  --cb-surface-strong: color-mix(in srgb, var(--surface2, var(--surface)) 92%, transparent);
+  --cb-border: var(--border);
+  --cb-land-fill: color-mix(in srgb, #d7c49a 72%, var(--surface) 28%);
+  --cb-land-hover: color-mix(in srgb, #e5d4aa 78%, var(--text) 22%);
+  --cb-land-stroke: color-mix(in srgb, #24333b 74%, var(--bg) 26%);
+  --cb-visited-fill: color-mix(in srgb, #27ae60 88%, var(--cb-land-fill) 12%);
+  --cb-visited-stroke: color-mix(in srgb, #d9ffe7 72%, var(--bg) 28%);
+  --cb-wishlist: color-mix(in srgb, #f39c12 88%, var(--cb-land-fill) 12%);
+  --cb-wishlist-fill: color-mix(in srgb, var(--cb-wishlist) 82%, var(--cb-land-fill) 18%);
+  --cb-selected-stroke: color-mix(in srgb, var(--text) 72%, var(--cb-land-fill) 28%);
+  --cb-active-cta-text: #101820;
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background:
+    radial-gradient(120% 80% at 50% 0%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 70%),
+    var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  overflow: hidden;
+}
+
+.cb-error {
+  margin: 0 18px 8px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text);
+  border: 1px solid var(--cb-border);
+  font-size: 13px;
+}
+.cb-banner {
+  margin: 0 18px 8px;
+  padding: 8px 14px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  border: 1px solid var(--cb-border);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+/* /mobius-ui:Root */
+
+/* mobius-ui:Header v1 — keep in sync; library candidate. Diverge below the marker only. */
+.cb-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px 8px;
+  flex-shrink: 0;
+}
+.cb-header h1 {
+  margin: 0;
+  font-size: 18px;
+  letter-spacing: 0.01em;
+  color: var(--text);
+  min-width: 0;
+  line-height: 1.15;
+}
+.cb-header h1 span.cb-eyebrow {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 500;
+  margin-bottom: 2px;
+}
+.cb-header-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+@media (min-height: 760px) {
+  .cb-header h1 { font-size: 20px; }
+}
+/* Wide screen: the bottom sheet doesn't really make sense, but
+   since this is mobile-first we keep the layout consistent and
+   just let the sheet sit at the bottom. The globe gets a bit of
+   breathing room. */
+@media (min-width: 720px) {
+  .cb-header {
+    padding: 18px 24px 10px;
+  }
+}
+@media (max-width: 430px) {
+  .cb-header {
+    align-items: center;
+    padding: 12px 14px 8px;
+  }
+  .cb-header h1 {
+    font-size: 16px;
+  }
+  .cb-counter {
+    padding: 5px 9px;
+  }
+  .cb-counter-pct {
+    display: none;
+  }
+}
+/* /mobius-ui:Header */
+
+/* mobius-ui:SyncPill v1 — keep in sync; library candidate. Diverge below the marker only. */
+.cb-counter {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--cb-surface) 88%, var(--bg) 12%);
+  border: 1px solid var(--cb-border);
+  font-variant-numeric: tabular-nums;
+  transition: opacity 200ms ease;
+}
+.cb-counter--faded {
+  /* When we boot offline with no cached GeoJSON, the totals are
+     unknown — fade the counter so the user doesn't read a
+     confidently-stated "0 / …" as fact. */
+  opacity: 0.55;
+}
+.cb-counter strong {
+  font-size: 18px;
+  color: var(--accent);
+}
+.cb-counter span {
+  color: var(--muted);
+  font-size: 13px;
+}
+.cb-counter-pct {
+  /* Share of the world visited. Divider + accent tint so it reads as
+     a derived stat, not another raw count. */
+  margin-left: 6px;
+  padding-left: 8px;
+  border-left: 1px solid var(--cb-border);
+  color: color-mix(in srgb, var(--accent) 85%, var(--text));
+  font-size: 13px;
+  font-weight: 600;
+}
+/* Sync pill — sits next to the counter; hidden when synced + online
+   (the common case). When pending > 0 or offline, the pill softly
+   announces what state the user's writes are in. */
+.cb-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  border: 1px solid var(--cb-border);
+  background: var(--cb-surface);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.cb-pill-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.cb-pill--pending .cb-pill-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.cb-pill--offline .cb-pill-dot {
+  background: color-mix(in srgb, var(--text) 50%, transparent);
+}
+/* /mobius-ui:SyncPill */
+
+/* mobius-ui:Globe v1 — keep in sync; library candidate. Diverge below the marker only. */
+.cb-globe-shell {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+}
+.cb-globe-canvas {
+  position: absolute;
+  inset: 0;
+  /* touch-action:none on the container div prevents the shell zoom-lock
+     from eating pinch gestures before the SVG's own touchAction:none
+     takes effect — important during the first render frame. */
+  touch-action: none;
+}
+.cb-globe-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.cb-globe-svg:focus {
+  outline: none;
+}
+.cb-globe-svg:focus-visible {
+  outline: none;
+}
+.cb-globe-svg g[role='button']:focus {
+  outline: none;
+}
+.cb-globe-svg g[role='button']:focus-visible .cb-country {
+  stroke: var(--cb-selected-stroke);
+  stroke-width: 1.1;
+}
+.cb-globe-loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 14px;
+  text-align: center;
+  padding: 0 24px;
+}
+.cb-globe-loading--offline {
+  /* Sticks slightly above center so it doesn't overlap the bottom
+     sheet's grip on short viewports. */
+  align-items: start;
+  padding-top: 28%;
+}
+.cb-country {
+  fill: var(--cb-land-fill);
+  stroke: var(--cb-land-stroke);
+  stroke-width: 0.62;
+  opacity: 1;
+  transition: fill 180ms ease, stroke 180ms ease, filter 180ms ease;
+  cursor: pointer;
+}
+.cb-country--visited {
+  fill: var(--cb-visited-fill);
+  /* Stroke previously mixed accent with literal "white", which
+     vanished the outline on light themes. Mix with --bg so the
+     border keeps separation from the ocean in every theme. */
+  stroke: var(--cb-visited-stroke);
+  stroke-width: 0.74;
+  filter:
+    drop-shadow(0 0 3px color-mix(in srgb, #27ae60 58%, transparent))
+    drop-shadow(0 0 8px color-mix(in srgb, #102f3a 44%, transparent));
+}
+.cb-country--wishlist {
+  fill: var(--cb-wishlist-fill);
+  stroke: color-mix(in srgb, var(--cb-wishlist) 70%, var(--bg) 30%);
+  stroke-width: 0.74;
+}
+.cb-country--selected {
+  stroke: var(--cb-selected-stroke);
+  stroke-width: 0.9;
+}
+/* /mobius-ui:Globe */
+
+/* mobius-ui:Sheet v1 — keep in sync; library candidate. Diverge below the marker only. */
+.cb-sheet {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--cb-surface-strong);
+  backdrop-filter: blur(14px);
+  border-top: 1px solid var(--cb-border);
+  border-radius: 22px 22px 0 0;
+  /* Neutral elevation shadow — same in light + dark themes; the
+     color-mix tint comes from the surface underneath. */
+  box-shadow: 0 -10px 30px color-mix(in srgb, var(--text) 18%, transparent);
+  /* Snap animations only — drag updates set the dragging class
+     which disables the transition so the sheet tracks the finger
+     without a perceived lag. */
+  transition: height 220ms cubic-bezier(.22,1,.36,1);
+  overflow: hidden;
+  /* min-height previously used vh which conflicted with the
+     percent-of-cb-app inline height during keyboard-up; drop
+     the min entirely — SHEET_MIN (0.30) already enforces the
+     floor in code. */
+}
+.cb-sheet--dragging {
+  transition: none;
+}
+.cb-sheet-handle {
+  /* 44px tap target — the grip itself stays visually small but
+     the surrounding hit area is finger-friendly. */
+  flex-shrink: 0;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  touch-action: none;
+  cursor: ns-resize;
+}
+.cb-sheet-grip {
+  width: 44px;
+  height: 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 24%, transparent);
+}
+.cb-sheet-search {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 14px 10px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: var(--cb-surface);
+  border: 1px solid var(--cb-border);
+  color: var(--muted);
+}
+.cb-sheet-search-icon {
+  flex-shrink: 0;
+  display: block;
+  color: var(--muted);
+}
+.cb-sheet-search input {
+  flex: 1;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  color: var(--text);
+  font: inherit;
+}
+.cb-sheet-search input::placeholder {
+  color: var(--muted);
+}
+.cb-sheet-search-clear {
+  flex-shrink: 0;
+  min-width: 28px;
+  min-height: 28px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  border: 0;
+  cursor: pointer;
+}
+/* /mobius-ui:Sheet */
+
+/* mobius-ui:Card v1 — keep in sync; library candidate. Diverge below the marker only. */
+/* Detail view — replaces search + list while a country is
+   selected. Big flag, name, region, primary CTA, close X.
+   Replacing rather than overlaying keeps the surface honest:
+   one mode at a time, predictable Back behavior. */
+.cb-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 4px 18px 24px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+.cb-detail-head {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 14px;
+}
+.cb-detail-flag {
+  font-size: 40px;
+  line-height: 1;
+}
+.cb-detail-name strong {
+  display: block;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.2;
+}
+.cb-detail-name small {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+.cb-detail-close {
+  min-width: 44px;
+  min-height: 44px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface2, var(--surface)) 80%, transparent);
+  color: var(--muted);
+  border: 1px solid var(--cb-border);
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease, transform 120ms ease;
+}
+.cb-detail-cta {
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 14px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  background: color-mix(in srgb, var(--surface2, var(--surface)) 88%, transparent);
+  color: var(--text);
+  border: 1px solid var(--cb-border);
+  cursor: pointer;
+  transition: transform 120ms ease, background 160ms ease, color 160ms ease;
+}
+.cb-detail-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+}
+.cb-detail-cta:active {
+  transform: scale(0.985);
+}
+.cb-detail-cta--visited.is-on {
+  background: var(--cb-visited-fill);
+  color: var(--cb-active-cta-text);
+  border-color: var(--cb-visited-fill);
+}
+.cb-detail-cta--wishlist.is-on {
+  background: var(--cb-wishlist);
+  color: var(--cb-active-cta-text);
+  border-color: var(--cb-wishlist);
+}
+.cb-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0 12px 18px;
+  -webkit-overflow-scrolling: touch;
+}
+.cb-list-empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 14px;
+}
+.cb-row {
+  /* Min-height enforces a 44px tap target without needing to
+     pad the row visually — the grid keeps content centred. */
+  width: 100%;
+  min-height: 56px;
+  display: grid;
+  grid-template-columns: 30px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  margin-bottom: 6px;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 60%, transparent);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 160ms ease, border-color 160ms ease, transform 120ms ease;
+}
+.cb-row:active {
+  transform: scale(0.995);
+}
+.cb-row-flag {
+  font-size: 22px;
+  line-height: 1;
+}
+.cb-row-text strong {
+  display: block;
+  font-size: 15px;
+  font-weight: 600;
+}
+.cb-row-text small {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.cb-row-badge {
+  /* Accent-tinted check — only shown when the country is visited.
+     Pure decoration; the row click opens detail where the actual
+     toggle lives. */
+  min-width: 28px;
+  height: 28px;
+  padding: 0 8px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--cb-visited-fill) 20%, transparent);
+  color: var(--cb-visited-fill);
+  font-size: 14px;
+  font-weight: 700;
+}
+.cb-row-badge--wishlist {
+  background: color-mix(in srgb, var(--cb-wishlist) 18%, transparent);
+  color: var(--cb-wishlist);
+}
+.cb-row-chevron {
+  color: var(--muted);
+  font-size: 22px;
+  line-height: 1;
+  padding-right: 4px;
+}
+.cb-row--visited .cb-row-text strong {
+  color: var(--cb-visited-fill);
+}
+.cb-row--wishlist {
+  border-color: color-mix(in srgb, var(--cb-wishlist) 22%, transparent);
+  background: color-mix(in srgb, var(--cb-wishlist) 8%, var(--surface));
+}
+.cb-row--wishlist .cb-row-text strong {
+  color: var(--cb-wishlist);
+}
+/* /mobius-ui:Card */
+`
+
 export default function Atlas({ appId, token }) {
   const storage = useMemo(() => makeStorage({ appId, token }), [appId, token])
 
@@ -1802,532 +2386,7 @@ export default function Atlas({ appId, token }) {
   // ----- render --------------------------------------------------------
   return (
     <div className="cb-app">
-      <style>{`
-        .cb-app {
-          /* Ocean palette keeps a stable atlas identity while mixing in the
-             active theme background so standalone installs and shell embeds
-             do not feel like different apps. */
-          --cb-ocean-1: color-mix(in srgb, #3f8cff 88%, var(--bg) 12%);
-          --cb-ocean-2: color-mix(in srgb, #1764c7 92%, var(--bg) 8%);
-          --cb-ocean-3: color-mix(in srgb, #0b2f73 94%, var(--bg) 6%);
-          /* Specular shine — a soft highlight. Mixing with literal white
-             read OK on dark themes but flat-out vanished into the page on
-             light ones; mix toward --bg so the highlight sits one shade
-             lighter than the underlying surface in every theme. The
-             accent tint keeps the globe feeling planet-shaped rather
-             than just paler-than-its-frame. */
-          --cb-shine-1: color-mix(in srgb, #ffffff 38%, transparent);
-          --cb-shine-2: color-mix(in srgb, #ffffff 12%, transparent);
-          --cb-shine-3: transparent;
-          --cb-surface: color-mix(in srgb, var(--surface) 82%, transparent);
-          /* --surface2 isn't guaranteed by every Möbius theme; fall back
-             to --surface so the sheet stays solid on themes that don't
-             define the deeper surface token. */
-          --cb-surface-strong: color-mix(in srgb, var(--surface2, var(--surface)) 92%, transparent);
-          --cb-border: var(--border);
-          --cb-land-fill: color-mix(in srgb, #d7c49a 72%, var(--surface) 28%);
-          --cb-land-hover: color-mix(in srgb, #e5d4aa 78%, var(--text) 22%);
-          --cb-land-stroke: color-mix(in srgb, #24333b 74%, var(--bg) 26%);
-          --cb-visited-fill: color-mix(in srgb, #27ae60 88%, var(--cb-land-fill) 12%);
-          --cb-visited-stroke: color-mix(in srgb, #d9ffe7 72%, var(--bg) 28%);
-          --cb-wishlist: color-mix(in srgb, #f39c12 88%, var(--cb-land-fill) 12%);
-          --cb-wishlist-fill: color-mix(in srgb, var(--cb-wishlist) 82%, var(--cb-land-fill) 18%);
-          --cb-selected-stroke: color-mix(in srgb, var(--text) 72%, var(--cb-land-fill) 28%);
-          --cb-active-cta-text: #101820;
-          position: fixed;
-          inset: 0;
-          display: flex;
-          flex-direction: column;
-          background:
-            radial-gradient(120% 80% at 50% 0%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 70%),
-            var(--bg);
-          color: var(--text);
-          font-family: var(--font);
-          overflow: hidden;
-        }
-
-        .cb-header {
-          display: flex;
-          align-items: baseline;
-          justify-content: space-between;
-          gap: 12px;
-          padding: 14px 18px 8px;
-          flex-shrink: 0;
-        }
-        .cb-header h1 {
-          margin: 0;
-          font-size: 18px;
-          letter-spacing: 0.01em;
-          color: var(--text);
-          min-width: 0;
-          line-height: 1.15;
-        }
-        .cb-header h1 span.cb-eyebrow {
-          display: block;
-          font-size: 11px;
-          letter-spacing: 0.16em;
-          text-transform: uppercase;
-          color: var(--muted);
-          font-weight: 500;
-          margin-bottom: 2px;
-        }
-        .cb-header-meta {
-          display: inline-flex;
-          align-items: center;
-          gap: 8px;
-          flex: 0 0 auto;
-        }
-        .cb-counter {
-          display: inline-flex;
-          align-items: baseline;
-          gap: 4px;
-          padding: 6px 12px;
-          border-radius: 999px;
-          background: color-mix(in srgb, var(--cb-surface) 88%, var(--bg) 12%);
-          border: 1px solid var(--cb-border);
-          font-variant-numeric: tabular-nums;
-          transition: opacity 200ms ease;
-        }
-        .cb-counter--faded {
-          /* When we boot offline with no cached GeoJSON, the totals are
-             unknown — fade the counter so the user doesn't read a
-             confidently-stated "0 / …" as fact. */
-          opacity: 0.55;
-        }
-        .cb-counter strong {
-          font-size: 18px;
-          color: var(--accent);
-        }
-        .cb-counter span {
-          color: var(--muted);
-          font-size: 13px;
-        }
-        .cb-counter-pct {
-          /* Share of the world visited. Divider + accent tint so it reads as
-             a derived stat, not another raw count. */
-          margin-left: 6px;
-          padding-left: 8px;
-          border-left: 1px solid var(--cb-border);
-          color: color-mix(in srgb, var(--accent) 85%, var(--text));
-          font-size: 13px;
-          font-weight: 600;
-        }
-        /* Sync pill — sits next to the counter; hidden when synced + online
-           (the common case). When pending > 0 or offline, the pill softly
-           announces what state the user's writes are in. */
-        .cb-pill {
-          display: inline-flex;
-          align-items: center;
-          gap: 6px;
-          padding: 5px 10px;
-          border-radius: 999px;
-          font-size: 11px;
-          font-weight: 600;
-          letter-spacing: 0.04em;
-          border: 1px solid var(--cb-border);
-          background: var(--cb-surface);
-          color: var(--muted);
-          font-variant-numeric: tabular-nums;
-        }
-        .cb-pill-dot {
-          width: 7px;
-          height: 7px;
-          border-radius: 50%;
-          background: var(--muted);
-        }
-        .cb-pill--pending .cb-pill-dot {
-          background: var(--accent);
-          box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
-        }
-        .cb-pill--offline .cb-pill-dot {
-          background: color-mix(in srgb, var(--text) 50%, transparent);
-        }
-
-        .cb-globe-shell {
-          flex: 1 1 auto;
-          min-height: 0;
-          position: relative;
-        }
-        .cb-globe-canvas {
-          position: absolute;
-          inset: 0;
-        }
-        .cb-globe-svg {
-          width: 100%;
-          height: 100%;
-          display: block;
-        }
-        .cb-globe-svg:focus {
-          outline: none;
-        }
-        .cb-globe-svg:focus-visible {
-          outline: none;
-        }
-        .cb-globe-svg g[role='button']:focus {
-          outline: none;
-        }
-        .cb-globe-svg g[role='button']:focus-visible .cb-country {
-          stroke: var(--cb-selected-stroke);
-          stroke-width: 1.1;
-        }
-        .cb-globe-loading {
-          position: absolute;
-          inset: 0;
-          display: grid;
-          place-items: center;
-          color: var(--muted);
-          font-size: 14px;
-          text-align: center;
-          padding: 0 24px;
-        }
-        .cb-globe-loading--offline {
-          /* Sticks slightly above center so it doesn't overlap the bottom
-             sheet's grip on short viewports. */
-          align-items: start;
-          padding-top: 28%;
-        }
-        .cb-country {
-          fill: var(--cb-land-fill);
-          stroke: var(--cb-land-stroke);
-          stroke-width: 0.62;
-          opacity: 1;
-          transition: fill 180ms ease, stroke 180ms ease, filter 180ms ease;
-          cursor: pointer;
-        }
-        .cb-country:hover {
-          fill: var(--cb-land-hover);
-        }
-        .cb-country--visited {
-          fill: var(--cb-visited-fill);
-          /* Stroke previously mixed accent with literal "white", which
-             vanished the outline on light themes. Mix with --bg so the
-             border keeps separation from the ocean in every theme. */
-          stroke: var(--cb-visited-stroke);
-          stroke-width: 0.74;
-          filter:
-            drop-shadow(0 0 3px color-mix(in srgb, #27ae60 58%, transparent))
-            drop-shadow(0 0 8px color-mix(in srgb, #102f3a 44%, transparent));
-        }
-        .cb-country--wishlist {
-          fill: var(--cb-wishlist-fill);
-          stroke: color-mix(in srgb, var(--cb-wishlist) 70%, var(--bg) 30%);
-          stroke-width: 0.74;
-        }
-        .cb-country--selected {
-          stroke: var(--cb-selected-stroke);
-          stroke-width: 0.9;
-        }
-
-        .cb-error {
-          margin: 0 18px 8px;
-          padding: 10px 14px;
-          border-radius: 12px;
-          background: color-mix(in srgb, var(--accent) 12%, transparent);
-          color: var(--text);
-          border: 1px solid var(--cb-border);
-          font-size: 13px;
-        }
-        .cb-banner {
-          margin: 0 18px 8px;
-          padding: 8px 14px;
-          border-radius: 12px;
-          background: color-mix(in srgb, var(--surface) 70%, transparent);
-          border: 1px solid var(--cb-border);
-          color: var(--muted);
-          font-size: 12px;
-          line-height: 1.4;
-        }
-
-        .cb-sheet {
-          flex-shrink: 0;
-          display: flex;
-          flex-direction: column;
-          background: var(--cb-surface-strong);
-          backdrop-filter: blur(14px);
-          border-top: 1px solid var(--cb-border);
-          border-radius: 22px 22px 0 0;
-          /* Neutral elevation shadow — same in light + dark themes; the
-             color-mix tint comes from the surface underneath. */
-          box-shadow: 0 -10px 30px color-mix(in srgb, var(--text) 18%, transparent);
-          /* Snap animations only — drag updates set the dragging class
-             which disables the transition so the sheet tracks the finger
-             without a perceived lag. */
-          transition: height 220ms cubic-bezier(.22,1,.36,1);
-          overflow: hidden;
-          /* min-height previously used vh which conflicted with the
-             percent-of-cb-app inline height during keyboard-up; drop
-             the min entirely — SHEET_MIN (0.30) already enforces the
-             floor in code. */
-        }
-        .cb-sheet--dragging {
-          transition: none;
-        }
-        .cb-sheet-handle {
-          /* 44px tap target — the grip itself stays visually small but
-             the surrounding hit area is finger-friendly. */
-          flex-shrink: 0;
-          height: 44px;
-          display: grid;
-          place-items: center;
-          touch-action: none;
-          cursor: ns-resize;
-        }
-        .cb-sheet-grip {
-          width: 44px;
-          height: 5px;
-          border-radius: 999px;
-          background: color-mix(in srgb, var(--text) 24%, transparent);
-        }
-        .cb-sheet-search {
-          flex-shrink: 0;
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          margin: 4px 14px 10px;
-          padding: 10px 14px;
-          border-radius: 14px;
-          background: var(--cb-surface);
-          border: 1px solid var(--cb-border);
-          color: var(--muted);
-        }
-        .cb-sheet-search-icon {
-          flex-shrink: 0;
-          display: block;
-          color: var(--muted);
-        }
-        .cb-sheet-search input {
-          flex: 1;
-          background: transparent;
-          border: 0;
-          outline: 0;
-          color: var(--text);
-          font: inherit;
-        }
-        .cb-sheet-search input::placeholder {
-          color: var(--muted);
-        }
-        .cb-sheet-search-clear {
-          flex-shrink: 0;
-          min-width: 28px;
-          min-height: 28px;
-          display: grid;
-          place-items: center;
-          padding: 0;
-          border-radius: 999px;
-          background: transparent;
-          color: var(--muted);
-          border: 0;
-          cursor: pointer;
-        }
-        .cb-sheet-search-clear:hover {
-          color: var(--text);
-        }
-
-        /* Detail view — replaces search + list while a country is
-           selected. Big flag, name, region, primary CTA, close X.
-           Replacing rather than overlaying keeps the surface honest:
-           one mode at a time, predictable Back behavior. */
-        .cb-detail {
-          display: flex;
-          flex-direction: column;
-          gap: 16px;
-          padding: 4px 18px 24px;
-          flex: 1 1 auto;
-          min-height: 0;
-          overflow-y: auto;
-        }
-        .cb-detail-head {
-          display: grid;
-          grid-template-columns: auto 1fr auto;
-          align-items: center;
-          gap: 14px;
-        }
-        .cb-detail-flag {
-          font-size: 40px;
-          line-height: 1;
-        }
-        .cb-detail-name strong {
-          display: block;
-          font-size: 20px;
-          font-weight: 600;
-          color: var(--text);
-          line-height: 1.2;
-        }
-        .cb-detail-name small {
-          display: block;
-          margin-top: 4px;
-          font-size: 12px;
-          color: var(--muted);
-          letter-spacing: 0.02em;
-        }
-        .cb-detail-close {
-          min-width: 44px;
-          min-height: 44px;
-          display: grid;
-          place-items: center;
-          padding: 0;
-          border-radius: 999px;
-          background: color-mix(in srgb, var(--surface2, var(--surface)) 80%, transparent);
-          color: var(--muted);
-          border: 1px solid var(--cb-border);
-          cursor: pointer;
-          transition: background 160ms ease, color 160ms ease;
-        }
-        .cb-detail-close:hover {
-          background: var(--surface2, var(--surface));
-          color: var(--text);
-        }
-        .cb-detail-cta {
-          min-height: 44px;
-          padding: 0 14px;
-          border-radius: 14px;
-          font-size: 15px;
-          font-weight: 600;
-          letter-spacing: 0.01em;
-          background: color-mix(in srgb, var(--surface2, var(--surface)) 88%, transparent);
-          color: var(--text);
-          border: 1px solid var(--cb-border);
-          cursor: pointer;
-          transition: transform 120ms ease, background 160ms ease, color 160ms ease;
-        }
-        .cb-detail-actions {
-          display: grid;
-          grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-          gap: 10px;
-        }
-        .cb-detail-cta:active {
-          transform: scale(0.985);
-        }
-        .cb-detail-cta--visited.is-on {
-          background: var(--cb-visited-fill);
-          color: var(--cb-active-cta-text);
-          border-color: var(--cb-visited-fill);
-        }
-        .cb-detail-cta--wishlist.is-on {
-          background: var(--cb-wishlist);
-          color: var(--cb-active-cta-text);
-          border-color: var(--cb-wishlist);
-        }
-        .cb-list {
-          flex: 1 1 auto;
-          min-height: 0;
-          overflow-y: auto;
-          overflow-x: hidden;
-          padding: 0 12px 18px;
-          -webkit-overflow-scrolling: touch;
-        }
-        .cb-list-empty {
-          padding: 24px;
-          text-align: center;
-          color: var(--muted);
-          font-size: 14px;
-        }
-        .cb-row {
-          /* Min-height enforces a 44px tap target without needing to
-             pad the row visually — the grid keeps content centred. */
-          width: 100%;
-          min-height: 56px;
-          display: grid;
-          grid-template-columns: 30px 1fr auto;
-          align-items: center;
-          gap: 12px;
-          padding: 8px 14px;
-          margin-bottom: 6px;
-          border: 1px solid transparent;
-          border-radius: 14px;
-          background: color-mix(in srgb, var(--surface) 60%, transparent);
-          color: var(--text);
-          font: inherit;
-          text-align: left;
-          cursor: pointer;
-          transition: background 160ms ease, border-color 160ms ease, transform 120ms ease;
-        }
-        .cb-row:hover {
-          background: color-mix(in srgb, var(--surface2, var(--surface)) 80%, transparent);
-        }
-        .cb-row:active {
-          transform: scale(0.995);
-        }
-        .cb-row-flag {
-          font-size: 22px;
-          line-height: 1;
-        }
-        .cb-row-text strong {
-          display: block;
-          font-size: 15px;
-          font-weight: 600;
-        }
-        .cb-row-text small {
-          display: block;
-          margin-top: 2px;
-          font-size: 12px;
-          color: var(--muted);
-        }
-        .cb-row-badge {
-          /* Accent-tinted check — only shown when the country is visited.
-             Pure decoration; the row click opens detail where the actual
-             toggle lives. */
-          min-width: 28px;
-          height: 28px;
-          padding: 0 8px;
-          display: grid;
-          place-items: center;
-          border-radius: 999px;
-          background: color-mix(in srgb, var(--cb-visited-fill) 20%, transparent);
-          color: var(--cb-visited-fill);
-          font-size: 14px;
-          font-weight: 700;
-        }
-        .cb-row-badge--wishlist {
-          background: color-mix(in srgb, var(--cb-wishlist) 18%, transparent);
-          color: var(--cb-wishlist);
-        }
-        .cb-row-chevron {
-          color: var(--muted);
-          font-size: 22px;
-          line-height: 1;
-          padding-right: 4px;
-        }
-        .cb-row--visited .cb-row-text strong {
-          color: var(--cb-visited-fill);
-        }
-        .cb-row--wishlist {
-          border-color: color-mix(in srgb, var(--cb-wishlist) 22%, transparent);
-          background: color-mix(in srgb, var(--cb-wishlist) 8%, var(--surface));
-        }
-        .cb-row--wishlist .cb-row-text strong {
-          color: var(--cb-wishlist);
-        }
-
-        @media (min-height: 760px) {
-          .cb-header h1 { font-size: 20px; }
-        }
-
-        /* Wide screen: the bottom sheet doesn't really make sense, but
-           since this is mobile-first we keep the layout consistent and
-           just let the sheet sit at the bottom. The globe gets a bit of
-           breathing room. */
-        @media (min-width: 720px) {
-          .cb-header {
-            padding: 18px 24px 10px;
-          }
-        }
-        @media (max-width: 430px) {
-          .cb-header {
-            align-items: center;
-            padding: 12px 14px 8px;
-          }
-          .cb-header h1 {
-            font-size: 16px;
-          }
-          .cb-counter {
-            padding: 5px 9px;
-          }
-          .cb-counter-pct {
-            display: none;
-          }
-        }
-      `}</style>
+      <style>{CSS}</style>
 
       <header className="cb-header">
         <h1>
