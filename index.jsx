@@ -1395,14 +1395,24 @@ const CSS = `
 }
 /* /mobius-ui:NativeTouch */
 
+/* mobius-ui:Focus v1 -- shared keyboard focus ring (WCAG 2.4.7); never bare outline:none */
+:where(button,a,input,textarea,select,summary,[role="button"],[tabindex]:not([tabindex="-1"])):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* /mobius-ui:Focus */
+
 /* mobius-ui:Root v1 — keep in sync; library candidate. Diverge below the marker only. */
 .cb-app {
-  /* Ocean palette keeps a stable atlas identity while mixing in the
-     active theme background so standalone installs and shell embeds
-     do not feel like different apps. */
+  /* mobius-ui:identity-palette — DELIBERATE divergence. The ocean blue is
+     an atlas-identity color the theme tokens can't express; it keeps a
+     stable atlas identity while mixing in the active theme background so
+     standalone installs and shell embeds do not feel like different apps.
+     Keep these hardcoded hex; everything else rides the theme tokens. */
   --cb-ocean-1: color-mix(in srgb, #3f8cff 88%, var(--bg) 12%);
   --cb-ocean-2: color-mix(in srgb, #1764c7 92%, var(--bg) 8%);
   --cb-ocean-3: color-mix(in srgb, #0b2f73 94%, var(--bg) 6%);
+  /* /mobius-ui:identity-palette */
   /* Specular shine — a soft highlight. Mixing with literal white
      read OK on dark themes but flat-out vanished into the page on
      light ones; mix toward --bg so the highlight sits one shade
@@ -1421,7 +1431,11 @@ const CSS = `
   --cb-land-fill: color-mix(in srgb, #d7c49a 72%, var(--surface) 28%);
   --cb-land-hover: color-mix(in srgb, #e5d4aa 78%, var(--text) 22%);
   --cb-land-stroke: color-mix(in srgb, #24333b 74%, var(--bg) 26%);
-  --cb-visited-fill: color-mix(in srgb, #27ae60 88%, var(--cb-land-fill) 12%);
+  /* Visited rides the theme's semantic --green (falls back to a stable
+     green on themes that don't define it) so "visited" tracks per-theme
+     accent shifts instead of pinning one hardcoded hue. */
+  --cb-visited-base: var(--green, #27ae60);
+  --cb-visited-fill: color-mix(in srgb, var(--cb-visited-base) 88%, var(--cb-land-fill) 12%);
   --cb-visited-stroke: color-mix(in srgb, #d9ffe7 72%, var(--bg) 28%);
   --cb-wishlist: color-mix(in srgb, #f39c12 88%, var(--cb-land-fill) 12%);
   --cb-wishlist-fill: color-mix(in srgb, var(--cb-wishlist) 82%, var(--cb-land-fill) 18%);
@@ -1466,7 +1480,8 @@ const CSS = `
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
-  padding: 14px 18px 8px;
+  /* Top-pinned bar: clear the notch / status bar on phones. */
+  padding: max(14px, env(safe-area-inset-top)) 18px 8px;
   flex-shrink: 0;
 }
 .cb-header h1 {
@@ -1477,6 +1492,10 @@ const CSS = `
   min-width: 0;
   line-height: 1.15;
 }
+/* Atlas's signature header: an uppercase letter-spaced eyebrow above a
+   changing sentence ("12 stamps on the map."). Intentional divergence
+   from the canonical brand-mark + title + subtitle Header shape; kept as
+   the app's identity. */
 .cb-header h1 span.cb-eyebrow {
   display: block;
   font-size: 11px;
@@ -1501,13 +1520,13 @@ const CSS = `
    breathing room. */
 @media (min-width: 720px) {
   .cb-header {
-    padding: 18px 24px 10px;
+    padding: max(18px, env(safe-area-inset-top)) 24px 10px;
   }
 }
 @media (max-width: 430px) {
   .cb-header {
     align-items: center;
-    padding: 12px 14px 8px;
+    padding: max(12px, env(safe-area-inset-top)) 14px 8px;
   }
   .cb-header h1 {
     font-size: 16px;
@@ -1530,6 +1549,9 @@ const CSS = `
   border-radius: 999px;
   background: color-mix(in srgb, var(--cb-surface) 88%, var(--bg) 12%);
   border: 1px solid var(--cb-border);
+  /* Derived stats render in --mono to match how sibling apps set
+     numeric/metadata chips. */
+  font-family: var(--mono);
   font-variant-numeric: tabular-nums;
   transition: opacity 200ms ease;
 }
@@ -1566,6 +1588,9 @@ const CSS = `
   gap: 6px;
   padding: 5px 10px;
   border-radius: 999px;
+  /* Metadata chip: --mono + tabular-nums so the pending count reads as a
+     derived stat, matching sibling apps. */
+  font-family: var(--mono);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -1608,18 +1633,24 @@ const CSS = `
   height: 100%;
   display: block;
 }
-.cb-globe-svg:focus {
+/* Suppress the outline only for mouse/touch focus; the shared Focus
+   block below still paints a ring for keyboard (:focus-visible) users. */
+.cb-globe-svg:focus:not(:focus-visible) {
   outline: none;
 }
-.cb-globe-svg:focus-visible {
+.cb-globe-svg g[role='button']:focus:not(:focus-visible) {
   outline: none;
 }
-.cb-globe-svg g[role='button']:focus {
+/* The focused country may sit near or behind the limb where a thin
+   stroke is easy to miss — pair a thick accent stroke with a
+   non-scaling accent halo so keyboard focus is unmistakable. */
+.cb-globe-svg g[role='button']:focus-visible {
   outline: none;
 }
 .cb-globe-svg g[role='button']:focus-visible .cb-country {
-  stroke: var(--cb-selected-stroke);
-  stroke-width: 1.1;
+  stroke: var(--accent);
+  stroke-width: 2.2;
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--accent) 70%, transparent));
 }
 .cb-globe-loading {
   position: absolute;
@@ -1653,7 +1684,7 @@ const CSS = `
   stroke: var(--cb-visited-stroke);
   stroke-width: 0.74;
   filter:
-    drop-shadow(0 0 3px color-mix(in srgb, #27ae60 58%, transparent))
+    drop-shadow(0 0 3px color-mix(in srgb, var(--cb-visited-base) 58%, transparent))
     drop-shadow(0 0 8px color-mix(in srgb, #102f3a 44%, transparent));
 }
 .cb-country--wishlist {
@@ -1729,9 +1760,13 @@ const CSS = `
   flex: 1;
   background: transparent;
   border: 0;
-  outline: 0;
   color: var(--text);
   font: inherit;
+}
+/* Keep the borderless look for mouse focus; the shared Focus block
+   still paints a keyboard ring on :focus-visible. */
+.cb-sheet-search input:focus:not(:focus-visible) {
+  outline: 0;
 }
 .cb-sheet-search input::placeholder {
   color: var(--muted);
@@ -1760,10 +1795,13 @@ const CSS = `
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding: 4px 18px 24px;
+  /* Bottom-most surface: keep the CTAs clear of the home indicator
+     / gesture bar on notched phones. */
+  padding: 4px 18px max(24px, env(safe-area-inset-bottom));
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 .cb-detail-head {
   display: grid;
@@ -1838,7 +1876,9 @@ const CSS = `
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 0 12px 18px;
+  /* Bottom-most surface: keep the last row clear of the home
+     indicator / gesture bar on notched phones. */
+  padding: 0 12px max(18px, env(safe-area-inset-bottom));
   -webkit-overflow-scrolling: touch;
 }
 .cb-list-empty {
@@ -1921,6 +1961,38 @@ const CSS = `
   color: var(--cb-wishlist);
 }
 /* /mobius-ui:Card */
+
+/* mobius-ui:Scrollskin v1 — keep in sync; library candidate. Slim
+   token-colored scrollbar so desktop/web doesn't fall back to the raw
+   OS default the mobile-first layout otherwise shows on wide screens. */
+.cb-list, .cb-detail {
+  scrollbar-width: thin;
+  scrollbar-color: var(--cb-border) transparent;
+}
+.cb-list::-webkit-scrollbar, .cb-detail::-webkit-scrollbar {
+  width: 9px;
+}
+.cb-list::-webkit-scrollbar-track, .cb-detail::-webkit-scrollbar-track {
+  background: transparent;
+}
+.cb-list::-webkit-scrollbar-thumb, .cb-detail::-webkit-scrollbar-thumb {
+  background: var(--cb-border);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+/* /mobius-ui:Scrollskin */
+
+/* mobius-ui:ReducedMotion v1 -- honor the OS reduce-motion setting */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+/* /mobius-ui:ReducedMotion */
 `
 
 export default function Atlas({ appId, token }) {
