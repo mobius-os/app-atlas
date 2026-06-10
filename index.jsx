@@ -170,13 +170,6 @@ const INITIAL_ROTATION = [12, -22, 0]
 // 120Hz devices don't spin twice as fast as 60Hz ones. ~2.1 deg/s ≈ the
 // previous 0.035 deg/frame at 60Hz.
 const IDLE_SPIN_DEG_PER_SEC = 2.1
-// Idle-spin commit interval. Each setRotation re-runs the d3 projection and
-// reconciles ~195 country paths, so committing a new rotation on every rAF
-// frame (~60Hz) reprojects the whole world 60×/s forever. The idle drift is
-// only ~2.1 deg/s, so committing at ~15Hz (one update per ~66ms ≈ 0.14° step)
-// is visually identical but does the expensive React/d3 work 4× less often.
-// The rAF still ticks every frame (cheap); we just batch the state commit.
-const IDLE_SPIN_COMMIT_MS = 66
 const PAN_DURATION_MS = 950
 export const ROTATION_SINGULARITY_LAT = 84.5
 
@@ -362,10 +355,6 @@ function Globe({
   const animationRef = useRef(0)
   const idleRef = useRef(0)
   const idleLastTickRef = useRef(0)
-  // Time accrued (ms) since the last idle-spin state commit. We tick every
-  // rAF frame but only commit (and pay the projection+reconcile cost) once
-  // this crosses IDLE_SPIN_COMMIT_MS — see the idle loop below.
-  const idleAccumRef = useRef(0)
   const dragRef = useRef({
     active: false,
     moved: false,
@@ -588,34 +577,17 @@ function Globe({
     if (reduceMotion) return
     cancelAnimationFrame(idleRef.current)
     idleLastTickRef.current = 0
-    idleAccumRef.current = 0
     const loop = (now) => {
       const last = idleLastTickRef.current || now
-      const dtMs = Math.min(100, now - last) // cap at 100ms to avoid jumps after a tab-switch
+      const dt = Math.min(100, now - last) / 1000 // cap dt at 100ms to avoid jumps after a tab-switch
       idleLastTickRef.current = now
-      const spinning =
-        !dragRef.current.active &&
-        !pinchRef.current.active &&
+      if (!dragRef.current.active && !pinchRef.current.active) {
         // Skip idle motion while an explicit focus pan is animating so we
         // don't fight it. animationRef.current is the rAF id; zero = idle.
-        (!animationRef.current || animationRef.current === 0)
-      if (spinning) {
-        // Accumulate elapsed time and commit a new rotation only once we've
-        // crossed the throttle interval. We advance by the *accumulated*
-        // time (not a fixed step), so the spin speed stays exactly
-        // IDLE_SPIN_DEG_PER_SEC regardless of display refresh rate — we've
-        // just made each visible step coarser to cut the reprojection cost.
-        idleAccumRef.current += dtMs
-        if (idleAccumRef.current >= IDLE_SPIN_COMMIT_MS) {
-          const dt = idleAccumRef.current / 1000
-          idleAccumRef.current = 0
+        if (!animationRef.current || animationRef.current === 0) {
           const [lng, lat, gamma] = rotationRef.current
           setRotationBoth([lng + IDLE_SPIN_DEG_PER_SEC * dt, lat, gamma])
         }
-      } else {
-        // Not spinning (dragging / pinching / focus-pan) — drop any partial
-        // accumulation so we don't lurch when idle motion resumes.
-        idleAccumRef.current = 0
       }
       idleRef.current = requestAnimationFrame(loop)
     }
@@ -2394,19 +2366,16 @@ export default function Atlas({ appId, token }) {
     [queueSave],
   )
 
-  // Tap on globe OR list row — select + open detail view + pan the globe
-  // to centre the country. NEVER toggles. The detail view's primary CTA is
-  // the only path to commit a visited/not-visited change. focusCountry is
-  // what makes the smooth-pan feature live — without this call the globe's
-  // focusRequest prop never changes and the pan effect is dead code.
+  // Tap on globe OR list row — select + open detail view. NEVER
+  // toggles. The detail view's primary CTA is the only path to commit
+  // a visited/not-visited change.
   const selectCountry = useCallback(
     (country) => {
       if (!country) return
       setSelectedIso3(country.iso3)
-      focusCountry(country)
       navPush()
     },
-    [focusCountry, navPush],
+    [navPush],
   )
 
   const selectedCountry = useMemo(
