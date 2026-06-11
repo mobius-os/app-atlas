@@ -372,9 +372,6 @@ function Globe({
   // that knows "how many fingers are down".
   const pointersRef = useRef(new Map())
   const zoomRef = useRef(1)
-  // lastTapRef tracks the previous tap for double-tap zoom detection.
-  // { ts: DOMHighResTimeStamp, x: number, y: number }
-  const lastTapRef = useRef(null)
   const [size, setSize] = useState({ width: 0, height: 0 })
   const [rotation, setRotation] = useState(INITIAL_ROTATION.slice())
   // zoom is a multiplier on the base radius; see MIN_ZOOM/MAX_ZOOM. Held in
@@ -785,29 +782,9 @@ function Globe({
     if (pointersRef.current.size > 0) return // other fingers still down
     dragRef.current.active = false
 
-    // Double-tap zoom: two taps within 350ms and 40 CSS px zoom in by
-    // ZOOM_STEP. This runs before the deferred moved=false reset, so
-    // a double-tap's second tap reads moved=false (the first tap cleared
-    // it) and the check below fires. After calling zoomBy we set
-    // moved=true so the subsequent onClick on the country path is silently
-    // swallowed — the user tapped twice to zoom, not to open a country.
-    if (!dragRef.current.moved && event.pointerType === 'touch') {
-      const now = performance.now()
-      const cx = event.clientX
-      const cy = event.clientY
-      const last = lastTapRef.current
-      if (
-        last &&
-        now - last.ts < 350 &&
-        Math.hypot(cx - last.x, cy - last.y) < 40
-      ) {
-        zoomBy(ZOOM_STEP)
-        lastTapRef.current = null
-        dragRef.current.moved = true // swallow the country onClick
-      } else {
-        lastTapRef.current = { ts: now, x: cx, y: cy }
-      }
-    }
+    // Tap means select — never zoom. A double-tap zoom used to live here
+    // and it hijacked country selection (rapid taps read as zoom); pinch,
+    // wheel, and the keyboard +/- are the zoom surface.
 
     // Defer the moved flag so onClick (which fires after pointerup) still
     // sees moved=true and skips the tap when the user was dragging.
