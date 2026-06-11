@@ -1108,179 +1108,189 @@ function BottomSheet({
         <span className="cb-sheet-grip" />
       </div>
 
-      {selectedCountry ? (
-        <div className="cb-detail" role="region" aria-label="Country detail">
-          <div className="cb-detail-head">
-            <span className="cb-detail-flag" aria-hidden="true">
-              {selectedCountry.flag || '🏳️'}
-            </span>
-            <div className="cb-detail-name">
-              <strong>{selectedCountry.displayName}</strong>
-              <small>
-                {selectedCountry.region || 'World'}
-                {selectedCountry.subregion ? ` · ${selectedCountry.subregion}` : ''}
-              </small>
-            </div>
-            <button
-              type="button"
-              className="cb-detail-close"
-              onClick={onDeselect}
-              aria-label="Close country detail"
-            >
-              <svg
-                width="18"
-                height="18"
-                viewBox="0 0 18 18"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-                aria-hidden="true"
-              >
-                <line x1="4" y1="4" x2="14" y2="14" />
-                <line x1="14" y1="4" x2="4" y2="14" />
-              </svg>
-            </button>
-          </div>
-
-          <div className="cb-detail-actions">
-            <button
-              type="button"
-              className={'cb-detail-cta cb-detail-cta--visited' + (isVisitedSelected ? ' is-on' : '')}
-              onClick={() => onToggleVisited(selectedCountry)}
-              aria-pressed={isVisitedSelected}
-            >
-              {isVisitedSelected ? 'Visited' : 'Mark visited'}
-            </button>
-            <button
-              type="button"
-              className={'cb-detail-cta cb-detail-cta--wishlist' + (isWishlistedSelected ? ' is-on' : '')}
-              onClick={() => onToggleWishlist(selectedCountry)}
-              aria-pressed={isWishlistedSelected}
-            >
-              {isWishlistedSelected ? 'Wishlisted' : 'Want to visit'}
-            </button>
-          </div>
-        </div>
-      ) : (
-        <>
-          <div className="cb-sheet-search">
-            {/* Inline SVG, not U+2315 — the codepoint renders as tofu on some
-                Android WebViews even when the system claims symbol coverage. */}
-            <svg
-              className="cb-sheet-search-icon"
-              width="16"
-              height="16"
-              viewBox="0 0 16 16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.6"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-              focusable="false"
-            >
-              <circle cx="7" cy="7" r="4.5" />
-              <line x1="10.5" y1="10.5" x2="13.5" y2="13.5" />
-            </svg>
-            <input
-              type="search"
-              value={query}
-              onChange={(event) => onQueryChange(event.target.value)}
-              placeholder="Search countries"
-              aria-label="Search countries"
-              autoCorrect="off"
-              autoCapitalize="off"
-              spellCheck={false}
-            />
-            {query ? (
+      {/* Detail panel and list are ALWAYS mounted so the list's scrollTop is
+          preserved by the DOM when the user goes back. CSS hides the inactive
+          panel; the scroll container never unmounts, never resets to 0. */}
+      <div
+        className={'cb-detail' + (selectedCountry ? '' : ' cb-detail--hidden')}
+        role="region"
+        aria-label="Country detail"
+        aria-hidden={!selectedCountry}
+      >
+        {selectedCountry && (
+          <>
+            <div className="cb-detail-head">
+              <span className="cb-detail-flag" aria-hidden="true">
+                {selectedCountry.flag || '🏳️'}
+              </span>
+              <div className="cb-detail-name">
+                <strong>{selectedCountry.displayName}</strong>
+                <small>
+                  {selectedCountry.region || 'World'}
+                  {selectedCountry.subregion ? ` · ${selectedCountry.subregion}` : ''}
+                </small>
+              </div>
               <button
                 type="button"
-                className="cb-sheet-search-clear"
-                onClick={() => onQueryChange('')}
-                aria-label="Clear search"
+                className="cb-detail-close"
+                onClick={onDeselect}
+                aria-label="Close country detail"
               >
                 <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 14 14"
+                  width="18"
+                  height="18"
+                  viewBox="0 0 18 18"
                   fill="none"
                   stroke="currentColor"
-                  strokeWidth="1.6"
+                  strokeWidth="1.8"
                   strokeLinecap="round"
                   aria-hidden="true"
                 >
-                  <line x1="3" y1="3" x2="11" y2="11" />
-                  <line x1="11" y1="3" x2="3" y2="11" />
+                  <line x1="4" y1="4" x2="14" y2="14" />
+                  <line x1="14" y1="4" x2="4" y2="14" />
                 </svg>
               </button>
-            ) : null}
-          </div>
+            </div>
 
-          <div
-            className="cb-list"
-            ref={scrollRef}
-            onPointerDown={onBodyDown}
-            onPointerMove={onBodyMove}
-            onPointerUp={onBodyUp}
-            onPointerCancel={onBodyUp}
-            onLostPointerCapture={onBodyUp}
+            <div className="cb-detail-actions">
+              <button
+                type="button"
+                className={'cb-detail-cta cb-detail-cta--visited' + (isVisitedSelected ? ' is-on' : '')}
+                onClick={() => onToggleVisited(selectedCountry)}
+                aria-pressed={isVisitedSelected}
+              >
+                {isVisitedSelected ? 'Visited' : 'Mark visited'}
+              </button>
+              <button
+                type="button"
+                className={'cb-detail-cta cb-detail-cta--wishlist' + (isWishlistedSelected ? ' is-on' : '')}
+                onClick={() => onToggleWishlist(selectedCountry)}
+                aria-pressed={isWishlistedSelected}
+              >
+                {isWishlistedSelected ? 'Wishlisted' : 'Want to visit'}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className={'cb-list-panel' + (selectedCountry ? ' cb-list-panel--hidden' : '')}>
+        <div className="cb-sheet-search">
+          {/* Inline SVG, not U+2315 — the codepoint renders as tofu on some
+              Android WebViews even when the system claims symbol coverage. */}
+          <svg
+            className="cb-sheet-search-icon"
+            width="16"
+            height="16"
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+            focusable="false"
           >
-            {countries.length === 0 ? (
-              <div className="cb-list-empty">No countries match.</div>
-            ) : (
-              countries.map((country) => {
-                const isVisited = visited.has(country.iso3)
-                const isWishlisted = wishlist.has(country.iso3)
-                return (
-                  <div
-                    key={country.iso3}
-                    role="button"
-                    tabIndex={0}
-                    aria-label={`Open ${country.displayName}`}
-                    className={
-                      'cb-row' +
-                      (isVisited ? ' cb-row--visited' : '') +
-                      (isWishlisted ? ' cb-row--wishlist' : '')
+            <circle cx="7" cy="7" r="4.5" />
+            <line x1="10.5" y1="10.5" x2="13.5" y2="13.5" />
+          </svg>
+          <input
+            type="search"
+            value={query}
+            onChange={(event) => onQueryChange(event.target.value)}
+            placeholder="Search countries"
+            aria-label="Search countries"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
+          />
+          {query ? (
+            <button
+              type="button"
+              className="cb-sheet-search-clear"
+              onClick={() => onQueryChange('')}
+              aria-label="Clear search"
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 14 14"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+                aria-hidden="true"
+              >
+                <line x1="3" y1="3" x2="11" y2="11" />
+                <line x1="11" y1="3" x2="3" y2="11" />
+              </svg>
+            </button>
+          ) : null}
+        </div>
+
+        <div
+          className="cb-list"
+          ref={scrollRef}
+          onPointerDown={onBodyDown}
+          onPointerMove={onBodyMove}
+          onPointerUp={onBodyUp}
+          onPointerCancel={onBodyUp}
+          onLostPointerCapture={onBodyUp}
+        >
+          {countries.length === 0 ? (
+            <div className="cb-list-empty">No countries match.</div>
+          ) : (
+            countries.map((country) => {
+              const isVisited = visited.has(country.iso3)
+              const isWishlisted = wishlist.has(country.iso3)
+              return (
+                <div
+                  key={country.iso3}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Open ${country.displayName}`}
+                  className={
+                    'cb-row' +
+                    (isVisited ? ' cb-row--visited' : '') +
+                    (isWishlisted ? ' cb-row--wishlist' : '')
+                  }
+                  onClick={() => onSelect(country)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault()
+                      onSelect(country)
                     }
-                    onClick={() => onSelect(country)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' || event.key === ' ') {
-                        event.preventDefault()
-                        onSelect(country)
-                      }
-                    }}
-                  >
-                    <span className="cb-row-flag" aria-hidden="true">
-                      {country.flag || '🏳️'}
+                  }}
+                >
+                  <span className="cb-row-flag" aria-hidden="true">
+                    {country.flag || '🏳️'}
+                  </span>
+                  <span className="cb-row-text">
+                    <strong>{country.displayName}</strong>
+                    <small>
+                      {country.region || 'World'}
+                      {country.subregion ? ` · ${country.subregion}` : ''}
+                    </small>
+                  </span>
+                  {isVisited || isWishlisted ? (
+                    <span
+                      className={'cb-row-badge' + (isWishlisted ? ' cb-row-badge--wishlist' : '')}
+                      aria-label={isVisited ? 'Visited' : 'Want to visit'}
+                      title={isVisited ? 'Visited' : 'Want to visit'}
+                    >
+                      {isVisited ? '✓' : '·'}
                     </span>
-                    <span className="cb-row-text">
-                      <strong>{country.displayName}</strong>
-                      <small>
-                        {country.region || 'World'}
-                        {country.subregion ? ` · ${country.subregion}` : ''}
-                      </small>
+                  ) : (
+                    <span className="cb-row-chevron" aria-hidden="true">
+                      ›
                     </span>
-                    {isVisited || isWishlisted ? (
-                      <span
-                        className={'cb-row-badge' + (isWishlisted ? ' cb-row-badge--wishlist' : '')}
-                        aria-label={isVisited ? 'Visited' : 'Want to visit'}
-                        title={isVisited ? 'Visited' : 'Want to visit'}
-                      >
-                        {isVisited ? '✓' : '·'}
-                      </span>
-                    ) : (
-                      <span className="cb-row-chevron" aria-hidden="true">
-                        ›
-                      </span>
-                    )}
-                  </div>
-                )
-              })
-            )}
-          </div>
-        </>
-      )}
+                  )}
+                </div>
+              )
+            })
+          )}
+        </div>
+      </div>
     </div>
   )
 }
@@ -1417,6 +1427,10 @@ const CSS = `
   --cb-wishlist: color-mix(in srgb, #f39c12 88%, var(--cb-land-fill) 12%);
   --cb-wishlist-fill: color-mix(in srgb, var(--cb-wishlist) 82%, var(--cb-land-fill) 18%);
   --cb-selected-stroke: color-mix(in srgb, var(--text) 72%, var(--cb-land-fill) 28%);
+  /* Selected fill: a bright warm highlight over the land base, clearly
+     distinguishable from both unvisited (tan) and visited (green) fills.
+     Mixing with accent keeps it on-theme across themes. */
+  --cb-selected-fill: color-mix(in srgb, var(--accent) 55%, var(--cb-land-fill) 45%);
   --cb-active-cta-text: #101820;
   position: fixed;
   inset: 0;
@@ -1670,8 +1684,19 @@ const CSS = `
   stroke-width: 0.74;
 }
 .cb-country--selected {
+  /* A fill override makes every polygon of a MultiPolygon country — even
+     tiny islands — visually distinct from unselected neighbors. Without
+     a fill change only the stroke differs (0.62→0.9px), which is invisible
+     on sub-pixel islands like Hawaii or the Azores. Overrides visited/wishlist
+     fill so the selection is always unambiguous; the CTA state in the detail
+     panel shows the visited/wishlist status instead. */
+  fill: var(--cb-selected-fill);
   stroke: var(--cb-selected-stroke);
-  stroke-width: 0.9;
+  stroke-width: 1.4;
+  /* Drop-shadow creates a visible halo even on the smallest polygon,
+     working on top of both globe shading and neighboring country fills. */
+  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--cb-selected-stroke) 70%, transparent))
+          drop-shadow(0 0 7px color-mix(in srgb, var(--cb-selected-stroke) 40%, transparent));
 }
 /* /mobius-ui:Globe */
 
@@ -1764,10 +1789,23 @@ const CSS = `
 /* /mobius-ui:Sheet */
 
 /* mobius-ui:Card v1 — keep in sync; library candidate. Diverge below the marker only. */
-/* Detail view — replaces search + list while a country is
-   selected. Big flag, name, region, primary CTA, close X.
-   Replacing rather than overlaying keeps the surface honest:
-   one mode at a time, predictable Back behavior. */
+/* Detail panel and list panel sit in the same flex slot. Exactly one
+   is visible at a time; the other is display:none so it takes no space
+   but stays mounted — this is the mechanism that preserves scrollTop on
+   the list without any JS save/restore logic. */
+.cb-detail--hidden,
+.cb-list-panel--hidden {
+  display: none !important;
+}
+.cb-list-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+/* Detail view — shown while a country is selected. Big flag, name,
+   region, primary CTAs, close X. Kept mounted at all times so that
+   toggling back to the list never resets its scroll position. */
 .cb-detail {
   display: flex;
   flex-direction: column;
