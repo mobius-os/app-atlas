@@ -1272,19 +1272,30 @@ function BottomSheet({
                       {country.subregion ? ` · ${country.subregion}` : ''}
                     </small>
                   </span>
-                  {isVisited || isWishlisted ? (
+                  {isWishlisted && !isVisited ? (
                     <span
-                      className={'cb-row-badge' + (isWishlisted ? ' cb-row-badge--wishlist' : '')}
-                      aria-label={isVisited ? 'Visited' : 'Want to visit'}
-                      title={isVisited ? 'Visited' : 'Want to visit'}
+                      className="cb-row-badge cb-row-badge--wishlist"
+                      aria-label="Want to visit"
+                      title="Want to visit"
                     >
-                      {isVisited ? '✓' : '·'}
+                      ·
                     </span>
-                  ) : (
-                    <span className="cb-row-chevron" aria-hidden="true">
-                      ›
-                    </span>
-                  )}
+                  ) : null}
+                  <button
+                    type="button"
+                    className={'cb-row-mark' + (isVisited ? ' cb-row-mark--on' : '')}
+                    aria-label={isVisited
+                      ? `Mark ${country.displayName} not visited`
+                      : `Mark ${country.displayName} visited`}
+                    aria-pressed={isVisited}
+                    title={isVisited ? 'Visited — tap to unmark' : 'Tap to mark visited'}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      onToggleVisited(country)
+                    }}
+                  >
+                    <span aria-hidden="true">{isVisited ? '✓' : ''}</span>
+                  </button>
                 </div>
               )
             })
@@ -1964,6 +1975,47 @@ const CSS = `
   font-size: 22px;
   line-height: 1;
   padding-right: 4px;
+}
+/* One-tap visited toggle on each list row: mark a country without opening
+   its detail (tap stops propagation). 40px hit target around a 26px ring;
+   fills accent with a check when visited. The owner's core flow is bulk-
+   marking 195 countries, so this turns "row → detail → mark → back" into a
+   single tap. */
+.cb-row-mark {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  margin: -8px -4px -8px 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  color: var(--cb-visited-fill, var(--accent));
+}
+.cb-row-mark > span {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  line-height: 1;
+  transition: background 0.12s, border-color 0.12s, transform 0.08s;
+}
+.cb-row-mark--on > span {
+  background: var(--cb-visited-fill, var(--accent));
+  border-color: var(--cb-visited-fill, var(--accent));
+  color: var(--bg);
+}
+.cb-row-mark:active > span { transform: scale(0.88); }
+@media (hover: hover) {
+  .cb-row-mark:hover > span { border-color: var(--cb-visited-fill, var(--accent)); }
 }
 .cb-row--visited .cb-row-text strong {
   color: var(--cb-visited-fill);
