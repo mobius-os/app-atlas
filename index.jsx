@@ -549,6 +549,18 @@ function Globe({
     })
   }, [countries, ready])
 
+  // Paint the selected country last. SVG stacks in document order, so a
+  // selected feature drawn early gets its highlight glow overpainted along
+  // every border it shares with a later-drawn neighbor. Reordering only the
+  // render keeps the list/tab order story simple (React moves the keyed <g>,
+  // hit-testing is unaffected — fills tile, so nothing new occludes a tap).
+  const renderCountries = useMemo(() => {
+    if (!selectedIso3) return normalizedCountries
+    const selected = normalizedCountries.find((c) => c.iso3 === selectedIso3)
+    if (!selected) return normalizedCountries
+    return [...normalizedCountries.filter((c) => c.iso3 !== selectedIso3), selected]
+  }, [normalizedCountries, selectedIso3])
+
   // Smooth-pan when the parent asks us to focus a particular country.
   useEffect(() => {
     if (!ready || !focusRequest?.iso3 || !d3Ref.current) return
@@ -912,7 +924,7 @@ function Globe({
              and hover tooltips surface the name on desktop. tabIndex and
              a keyboard handler make small-country selection reachable
              without a sub-pixel tap. */}
-          {normalizedCountries.map((country) => {
+          {renderCountries.map((country) => {
             const d = projectionData.path({
               type: 'Feature',
               properties: {},
@@ -1437,11 +1449,11 @@ const CSS = `
   --cb-visited-stroke: color-mix(in srgb, #d9ffe7 72%, var(--bg) 28%);
   --cb-wishlist: color-mix(in srgb, #f39c12 88%, var(--cb-land-fill) 12%);
   --cb-wishlist-fill: color-mix(in srgb, var(--cb-wishlist) 82%, var(--cb-land-fill) 18%);
-  --cb-selected-stroke: color-mix(in srgb, var(--text) 72%, var(--cb-land-fill) 28%);
-  /* Selected fill: a bright warm highlight over the land base, clearly
-     distinguishable from both unvisited (tan) and visited (green) fills.
-     Mixing with accent keeps it on-theme across themes. */
-  --cb-selected-fill: color-mix(in srgb, var(--accent) 55%, var(--cb-land-fill) 45%);
+  /* Selected fill: the theme accent brightened with literal white — NOT
+     --text, which flips dark on light themes and would read as shadow
+     instead of highlight. The white lift keeps it clearly lighter than
+     the visited green even on themes whose accent is itself green. */
+  --cb-selected-fill: color-mix(in srgb, var(--accent) 72%, #ffffff 28%);
   --cb-active-cta-text: #101820;
   position: fixed;
   inset: 0;
@@ -1695,19 +1707,24 @@ const CSS = `
   stroke-width: 0.74;
 }
 .cb-country--selected {
-  /* A fill override makes every polygon of a MultiPolygon country — even
-     tiny islands — visually distinct from unselected neighbors. Without
-     a fill change only the stroke differs (0.62→0.9px), which is invisible
-     on sub-pixel islands like Hawaii or the Azores. Overrides visited/wishlist
-     fill so the selection is always unambiguous; the CTA state in the detail
-     panel shows the visited/wishlist status instead. */
+  /* Selection highlights the TERRITORY, never its boundary. A stroke-based
+     highlight can't work here: each country is one path, but countries
+     paint in document order, so a neighbor drawn later overpaints the half
+     of the selection stroke that falls on its side of a shared border (and
+     redraws its own dark stroke on top) — the white outline showed up
+     broken wherever the selected country touched land. A fill can't be
+     overpainted (polygons tile), and because the whole MultiPolygon is one
+     path keyed by iso3 the fill covers every island and exclave too.
+     The country keeps its normal boundary stroke (land/visited/wishlist);
+     only the fill changes. Overrides visited/wishlist fill so the
+     selection is always unambiguous — the CTA state in the detail panel
+     shows the visited/wishlist status instead. */
   fill: var(--cb-selected-fill);
-  stroke: var(--cb-selected-stroke);
-  stroke-width: 1.4;
-  /* Drop-shadow creates a visible halo even on the smallest polygon,
-     working on top of both globe shading and neighboring country fills. */
-  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--cb-selected-stroke) 70%, transparent))
-          drop-shadow(0 0 7px color-mix(in srgb, var(--cb-selected-stroke) 40%, transparent));
+  /* Accent glow hugs the filled territory so even one-pixel islands pop;
+     it follows the shape, not the border, so it reads as "this landmass is
+     lit", not as another outline. */
+  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--accent) 70%, transparent))
+          drop-shadow(0 0 7px color-mix(in srgb, var(--accent) 40%, transparent));
 }
 /* /mobius-ui:Globe */
 
