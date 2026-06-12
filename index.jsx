@@ -90,7 +90,6 @@ function makeStorage({ appId, token }) {
 // --------------------------------------------------------------------------
 const soften = (value) => String(value || '').toLowerCase().trim()
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value))
-const cubicOut = (t) => 1 - Math.pow(1 - t, 3)
 
 // Versor (unit-quaternion) helpers for "grab the surface" dragging. A fixed
 // deg/px drag can't track the surface: on an orthographic globe the same
@@ -166,11 +165,6 @@ function pinchSpread(pointers) {
 // Initial rotation — Western Europe slightly above the equator. Easier to
 // recognize than 0,0 (which puts the user in the Atlantic).
 const INITIAL_ROTATION = [12, -22, 0]
-// Time-delta based idle spin — degrees per *second*, not per frame, so
-// 120Hz devices don't spin twice as fast as 60Hz ones. ~2.1 deg/s ≈ the
-// previous 0.035 deg/frame at 60Hz.
-const IDLE_SPIN_DEG_PER_SEC = 2.1
-const PAN_DURATION_MS = 950
 export const ROTATION_SINGULARITY_LAT = 84.5
 
 // Zoom — a multiplier on the size-derived base radius (1 = the default
@@ -265,16 +259,15 @@ function toIsoSet(values) {
   return new Set()
 }
 
-export function orderCountriesForList(countries, visitedValues = new Set(), wishlistValues = new Set(), query = '') {
+// List order is alphabetical and INDEPENDENT of visited/wishlist state.
+// It used to rank marked countries first, which meant every tap re-sorted
+// the list out from under the user's thumb — mark a country mid-scroll and
+// the row teleported toward the top. Stable order keeps the row exactly
+// where it was; the status filter (see filterCountriesByStatus) is how the
+// user asks for "just my visited" instead.
+export function orderCountriesForList(countries, query = '') {
   if (!Array.isArray(countries)) return []
-  const visitedSet = toIsoSet(visitedValues)
-  const wishlistSet = toIsoSet(wishlistValues)
   const text = soften(query)
-  const rank = (country) => {
-    if (visitedSet.has(country?.iso3)) return 0
-    if (wishlistSet.has(country?.iso3)) return 1
-    return 2
-  }
   return countries
     .filter((country) => {
       if (!country || typeof country !== 'object') return false
@@ -291,15 +284,35 @@ export function orderCountriesForList(countries, visitedValues = new Set(), wish
         .some((value) => soften(value).includes(text))
     })
     .sort((a, b) => {
-      const ar = rank(a)
-      const br = rank(b)
-      if (ar !== br) return ar - br
       const an = String(a.displayName || a.name || a.iso3 || '')
       const bn = String(b.displayName || b.name || b.iso3 || '')
       const nameOrder = an.localeCompare(bn)
       if (nameOrder !== 0) return nameOrder
       return String(a.iso3 || '').localeCompare(String(b.iso3 || ''))
     })
+}
+
+// The three status filters the chips offer. 'all' is the resting state.
+export const STATUS_FILTERS = ['all', 'visited', 'wishlist']
+
+// Status filtering is separate from ordering so the list can be narrowed
+// without ever being re-sorted. Visited wins over wishlist when malformed
+// persisted data lists a country in both sets — the same exclusivity
+// toggleCountryStatus maintains.
+export function filterCountriesByStatus(countries, filter, visitedValues = new Set(), wishlistValues = new Set()) {
+  if (!Array.isArray(countries)) return []
+  if (filter === 'visited') {
+    const visitedSet = toIsoSet(visitedValues)
+    return countries.filter((country) => visitedSet.has(country?.iso3))
+  }
+  if (filter === 'wishlist') {
+    const visitedSet = toIsoSet(visitedValues)
+    const wishlistSet = toIsoSet(wishlistValues)
+    return countries.filter(
+      (country) => wishlistSet.has(country?.iso3) && !visitedSet.has(country?.iso3),
+    )
+  }
+  return countries
 }
 
 export function toggleCountryStatus(visitedValues, wishlistValues, iso3, status) {
@@ -340,21 +353,24 @@ function reverseWinding(geometry) {
 
 // --------------------------------------------------------------------------
 // Globe — orthographic d3-geo projection on an SVG canvas.
+//
+// The globe only moves when the user moves it (drag to rotate, pinch /
+// wheel / keys to zoom). An autonomous idle spin and a pan-to-country
+// animation both used to live here; the spin was removed on owner feedback
+// (a globe that drifts on its own fights the user's framing) and the pan
+// was reverted earlier for hijacking tap-to-select.
 // --------------------------------------------------------------------------
 function Globe({
   countries,
   visited,
   wishlist,
   selectedIso3,
-  focusRequest,
+  statusFilter,
   onTapCountry,
   onTapOcean,
 }) {
   const containerRef = useRef(null)
   const d3Ref = useRef(null)
-  const animationRef = useRef(0)
-  const idleRef = useRef(0)
-  const idleLastTickRef = useRef(0)
   const dragRef = useRef({
     active: false,
     moved: false,
@@ -364,8 +380,8 @@ function Globe({
   })
   const rotationRef = useRef(INITIAL_ROTATION.slice())
   // pinchRef holds the in-flight two-finger gesture. While active it owns
-  // the globe: drag-rotate and idle spin both stand down (they check
-  // pinchRef.current.active) so the two gestures never fight over rotation.
+  // the globe: drag-rotate stands down (it checks pinchRef.current.active)
+  // so the two gestures never fight over rotation.
   const pinchRef = useRef({ active: false, startDist: 0, startZoom: 1 })
   // Live pointer positions keyed by pointerId. A single entry = drag; a
   // second entry promotes the gesture to a pinch. This is the one place
@@ -475,49 +491,13 @@ function Globe({
     [setZoomBoth],
   )
 
-  const animateTo = useCallback(
-    (target, duration = PAN_DURATION_MS) => {
-      cancelAnimationFrame(animationRef.current)
-      const start = rotationRef.current.slice()
-      // Walk the short way around the globe — wrap longitudes so the
-      // animation doesn't take the long route across the Pacific.
-      let dLng = target[0] - start[0]
-      while (dLng > 180) dLng -= 360
-      while (dLng < -180) dLng += 360
-      const endLng = start[0] + dLng
-      const startedAt = performance.now()
-      const step = (now) => {
-        const t = clamp((now - startedAt) / duration, 0, 1)
-        const k = cubicOut(t)
-        const next = [
-          start[0] + (endLng - start[0]) * k,
-          start[1] + (target[1] - start[1]) * k,
-          0,
-        ]
-        setRotationBoth(next)
-        if (t < 1) {
-          animationRef.current = requestAnimationFrame(step)
-        } else {
-          // Clear the rAF id on completion. The idle-spin loop reads
-          // animationRef.current === 0 as "no focus-pan running"; leaving
-          // the last frame's id in place permanently freezes the idle spin
-          // after the first pan.
-          animationRef.current = 0
-        }
-      }
-      animationRef.current = requestAnimationFrame(step)
-    },
-    [setRotationBoth],
-  )
-
   // Repair inverted-winding features once d3-geo is loaded. Some source
   // features (here: Bermuda) ship an outer ring wound the wrong way; d3-geo
   // then fills the whole hemisphere for that feature, which both paints a
   // giant disc AND — because each country path is the tap target — swallows
   // every globe tap (the "tapping the globe selects Bermuda" bug). geoArea
   // > 2π is the signature of an inverted feature; rewind it. Memoized so the
-  // ~180 area checks run once per data/d3-ready change, not per render. Used
-  // for both rendering and focus so the centroid is correct too.
+  // ~180 area checks run once per data/d3-ready change, not per render.
   const normalizedCountries = useMemo(() => {
     const d3 = d3Ref.current
     if (!d3) return countries
@@ -550,8 +530,8 @@ function Globe({
   }, [countries, ready])
 
   // Paint the selected country last. SVG stacks in document order, so a
-  // selected feature drawn early gets its highlight glow overpainted along
-  // every border it shares with a later-drawn neighbor. Reordering only the
+  // selected feature drawn early gets its boundary overpainted along every
+  // border it shares with a later-drawn neighbor. Reordering only the
   // render keeps the list/tab order story simple (React moves the keyed <g>,
   // hit-testing is unaffected — fills tile, so nothing new occludes a tap).
   const renderCountries = useMemo(() => {
@@ -560,51 +540,6 @@ function Globe({
     if (!selected) return normalizedCountries
     return [...normalizedCountries.filter((c) => c.iso3 !== selectedIso3), selected]
   }, [normalizedCountries, selectedIso3])
-
-  // Smooth-pan when the parent asks us to focus a particular country.
-  useEffect(() => {
-    if (!ready || !focusRequest?.iso3 || !d3Ref.current) return
-    const country = normalizedCountries.find((c) => c.iso3 === focusRequest.iso3)
-    if (!country) return
-    const [lng, lat] = d3Ref.current.geoCentroid({
-      type: 'Feature',
-      properties: {},
-      geometry: country.geometry,
-    })
-    animateTo([-lng, -lat, 0], focusRequest.duration ?? PAN_DURATION_MS)
-  }, [animateTo, normalizedCountries, focusRequest, ready])
-
-  // Idle spin — runs every frame except during user drag or focus pan.
-  // Honors prefers-reduced-motion: vestibular users see a still globe by
-  // default, and the focus-pan animation still works because that's
-  // user-initiated. We advance by elapsed time (not by a constant per
-  // frame) so the spin speed is the same on 60Hz and 120Hz displays.
-  useEffect(() => {
-    const reduceMotion =
-      typeof window !== 'undefined' &&
-      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-    if (reduceMotion) return
-    cancelAnimationFrame(idleRef.current)
-    idleLastTickRef.current = 0
-    const loop = (now) => {
-      const last = idleLastTickRef.current || now
-      const dt = Math.min(100, now - last) / 1000 // cap dt at 100ms to avoid jumps after a tab-switch
-      idleLastTickRef.current = now
-      if (!dragRef.current.active && !pinchRef.current.active) {
-        // Skip idle motion while an explicit focus pan is animating so we
-        // don't fight it. animationRef.current is the rAF id; zero = idle.
-        if (!animationRef.current || animationRef.current === 0) {
-          const [lng, lat, gamma] = rotationRef.current
-          setRotationBoth([lng + IDLE_SPIN_DEG_PER_SEC * dt, lat, gamma])
-        }
-      }
-      idleRef.current = requestAnimationFrame(loop)
-    }
-    idleRef.current = requestAnimationFrame(loop)
-    return () => cancelAnimationFrame(idleRef.current)
-  }, [setRotationBoth])
-
-  useEffect(() => () => cancelAnimationFrame(animationRef.current), [])
 
   // Re-compute projection on every rotation/zoom/size change.
   const projectionData = useMemo(() => {
@@ -650,14 +585,11 @@ function Globe({
 
   const onPointerDown = (event) => {
     event.currentTarget.blur?.()
-    cancelAnimationFrame(animationRef.current)
-    animationRef.current = 0
     pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY })
     event.currentTarget.setPointerCapture?.(event.pointerId)
     if (pointersRef.current.size >= 2) {
       // Second finger down — enter pinch. Drag stands down (and is flagged
-      // moved so the gesture can't end in a tap); idle spin pauses on
-      // pinchRef.active.
+      // moved so the gesture can't end in a tap).
       dragRef.current.active = false
       dragRef.current.moved = true
       pinchRef.current = {
@@ -750,8 +682,7 @@ function Globe({
           if (Math.abs(roll) > 90) return
           const next = nextDragRotation(rotationRef.current, lng, lat)
           if (!next) return
-          // Keep north up (zero roll, clamp the pole): idle spin and
-          // country-focus both assume an upright axis, and a free-tilting
+          // Keep north up (zero roll, clamp the pole): a free-tilting
           // globe reads as broken in a country picker.
           setRotationBoth(next)
         }
@@ -934,6 +865,14 @@ function Globe({
             const isVisited = visited.has(country.iso3)
             const isWishlisted = wishlist.has(country.iso3)
             const isSelected = country.iso3 === selectedIso3
+            // Mirror the list's status filter on the globe: countries that
+            // don't match fade back so the matching set reads at a glance.
+            // The selected country never dims — selection outranks filters.
+            const matchesFilter =
+              !statusFilter ||
+              statusFilter === 'all' ||
+              (statusFilter === 'visited' ? isVisited : isWishlisted && !isVisited)
+            const isDimmed = !matchesFilter && !isSelected
             const label = isVisited
               ? `${country.displayName} — visited`
               : isWishlisted
@@ -964,7 +903,8 @@ function Globe({
                     'cb-country' +
                     (isVisited ? ' cb-country--visited' : '') +
                     (isWishlisted ? ' cb-country--wishlist' : '') +
-                    (isSelected ? ' cb-country--selected' : '')
+                    (isSelected ? ' cb-country--selected' : '') +
+                    (isDimmed ? ' cb-country--dimmed' : '')
                   }
                   vectorEffect="non-scaling-stroke"
                 />
@@ -998,13 +938,82 @@ const SHEET_MID = 0.50  // 50% — neutral
 const SHEET_MAX = 0.80  // 80% — expanded
 const SHEET_STOPS_DEFAULT = [SHEET_MIN, SHEET_MID, SHEET_MAX]
 
+// Icon-only filter chips — globe = everything, check = visited, star =
+// wishlist. Inline SVGs, not unicode glyphs, for the same reason as the
+// search icon (codepoints render as tofu on some Android WebViews); the
+// aria-label + title carry the meaning for screen readers and desktop hover.
+const FILTER_CHIPS = [
+  {
+    id: 'all',
+    label: 'Show all countries',
+    icon: (
+      <svg
+        width="18"
+        height="18"
+        viewBox="0 0 18 18"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        aria-hidden="true"
+        focusable="false"
+      >
+        <circle cx="9" cy="9" r="6.75" />
+        <ellipse cx="9" cy="9" rx="3.1" ry="6.75" />
+        <line x1="2.25" y1="9" x2="15.75" y2="9" />
+      </svg>
+    ),
+  },
+  {
+    id: 'visited',
+    label: 'Show visited only',
+    icon: (
+      <svg
+        width="18"
+        height="18"
+        viewBox="0 0 18 18"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+        focusable="false"
+      >
+        <polyline points="3.2,9.6 7.2,13.4 14.8,4.8" />
+      </svg>
+    ),
+  },
+  {
+    id: 'wishlist',
+    label: 'Show wishlist only',
+    icon: (
+      <svg
+        width="18"
+        height="18"
+        viewBox="0 0 18 18"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+        aria-hidden="true"
+        focusable="false"
+      >
+        <path d="M9 2.4 L10.9 6.7 15.6 7.2 12.1 10.4 13.1 15 9 12.5 4.9 15 5.9 10.4 2.4 7.2 7.1 6.7 Z" />
+      </svg>
+    ),
+  },
+]
+
 function BottomSheet({
   countries,
   visited,
   wishlist,
   selectedCountry,
   query,
+  statusFilter,
   onQueryChange,
+  onFilterChange,
   onSelect,
   onToggleVisited,
   onToggleWishlist,
@@ -1187,57 +1196,78 @@ function BottomSheet({
       </div>
 
       <div className={'cb-list-panel' + (selectedCountry ? ' cb-list-panel--hidden' : '')}>
-        <div className="cb-sheet-search">
-          {/* Inline SVG, not U+2315 — the codepoint renders as tofu on some
-              Android WebViews even when the system claims symbol coverage. */}
-          <svg
-            className="cb-sheet-search-icon"
-            width="16"
-            height="16"
-            viewBox="0 0 16 16"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.6"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-            focusable="false"
-          >
-            <circle cx="7" cy="7" r="4.5" />
-            <line x1="10.5" y1="10.5" x2="13.5" y2="13.5" />
-          </svg>
-          <input
-            type="search"
-            value={query}
-            onChange={(event) => onQueryChange(event.target.value)}
-            placeholder="Search countries"
-            aria-label="Search countries"
-            autoCorrect="off"
-            autoCapitalize="off"
-            spellCheck={false}
-          />
-          {query ? (
-            <button
-              type="button"
-              className="cb-sheet-search-clear"
-              onClick={() => onQueryChange('')}
-              aria-label="Clear search"
+        <div className="cb-sheet-controls">
+          <div className="cb-sheet-search">
+            {/* Inline SVG, not U+2315 — the codepoint renders as tofu on some
+                Android WebViews even when the system claims symbol coverage. */}
+            <svg
+              className="cb-sheet-search-icon"
+              width="16"
+              height="16"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+              focusable="false"
             >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 14 14"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.6"
-                strokeLinecap="round"
-                aria-hidden="true"
+              <circle cx="7" cy="7" r="4.5" />
+              <line x1="10.5" y1="10.5" x2="13.5" y2="13.5" />
+            </svg>
+            <input
+              type="search"
+              value={query}
+              onChange={(event) => onQueryChange(event.target.value)}
+              placeholder="Search countries"
+              aria-label="Search countries"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
+            />
+            {query ? (
+              <button
+                type="button"
+                className="cb-sheet-search-clear"
+                onClick={() => onQueryChange('')}
+                aria-label="Clear search"
               >
-                <line x1="3" y1="3" x2="11" y2="11" />
-                <line x1="11" y1="3" x2="3" y2="11" />
-              </svg>
-            </button>
-          ) : null}
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 14 14"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                  aria-hidden="true"
+                >
+                  <line x1="3" y1="3" x2="11" y2="11" />
+                  <line x1="11" y1="3" x2="3" y2="11" />
+                </svg>
+              </button>
+            ) : null}
+          </div>
+
+          {/* Status filter — icon-only segmented control beside the search
+              box. Filters the list (and dims non-matching countries on the
+              globe); the choice persists across sessions via cacheWrite. */}
+          <div className="cb-filters" role="group" aria-label="Filter countries by status">
+            {FILTER_CHIPS.map((chip) => (
+              <button
+                key={chip.id}
+                type="button"
+                className={'cb-filter' + (statusFilter === chip.id ? ' is-on' : '')}
+                aria-label={chip.label}
+                aria-pressed={statusFilter === chip.id}
+                title={chip.label}
+                onClick={() => onFilterChange(chip.id)}
+              >
+                {chip.icon}
+              </button>
+            ))}
+          </div>
         </div>
 
         <div
@@ -1250,7 +1280,15 @@ function BottomSheet({
           onLostPointerCapture={onBodyUp}
         >
           {countries.length === 0 ? (
-            <div className="cb-list-empty">No countries match.</div>
+            <div className="cb-list-empty">
+              {query
+                ? 'No countries match.'
+                : statusFilter === 'visited'
+                  ? 'No visited countries yet — tap the ring on a row to add one.'
+                  : statusFilter === 'wishlist'
+                    ? 'Nothing on the wishlist yet — open a country and tap “Want to visit”.'
+                    : 'No countries match.'}
+            </div>
           ) : (
             countries.map((country) => {
               const isVisited = visited.has(country.iso3)
@@ -1284,15 +1322,6 @@ function BottomSheet({
                       {country.subregion ? ` · ${country.subregion}` : ''}
                     </small>
                   </span>
-                  {isWishlisted && !isVisited ? (
-                    <span
-                      className="cb-row-badge cb-row-badge--wishlist"
-                      aria-label="Want to visit"
-                      title="Want to visit"
-                    >
-                      ·
-                    </span>
-                  ) : null}
                   <button
                     type="button"
                     className={'cb-row-mark' + (isVisited ? ' cb-row-mark--on' : '')}
@@ -1528,9 +1557,6 @@ const CSS = `
   .cb-counter {
     padding: 5px 9px;
   }
-  .cb-counter-pct {
-    display: none;
-  }
 }
 /* /mobius-ui:Header */
 
@@ -1563,16 +1589,6 @@ const CSS = `
   color: var(--muted);
   font-size: 13px;
 }
-.cb-counter-pct {
-  /* Share of the world visited. Divider + accent tint so it reads as
-     a derived stat, not another raw count. */
-  margin-left: 6px;
-  padding-left: 8px;
-  border-left: 1px solid var(--cb-border);
-  color: color-mix(in srgb, var(--accent) 85%, var(--text));
-  font-size: 13px;
-  font-weight: 600;
-}
 /* Sync pill — sits next to the counter; hidden when synced + online
    (the common case). When pending > 0 or offline, the pill softly
    announces what state the user's writes are in. */
@@ -1598,10 +1614,6 @@ const CSS = `
   height: 7px;
   border-radius: 50%;
   background: var(--muted);
-}
-.cb-pill--pending .cb-pill-dot {
-  background: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 .cb-pill--offline .cb-pill-dot {
   background: color-mix(in srgb, var(--text) 50%, transparent);
@@ -1667,7 +1679,7 @@ const CSS = `
   stroke: var(--cb-land-stroke);
   stroke-width: 0.62;
   opacity: 1;
-  transition: fill 180ms ease, stroke 180ms ease, filter 180ms ease;
+  transition: fill 180ms ease, stroke 180ms ease, opacity 180ms ease;
   cursor: pointer;
 }
 .cb-country--visited {
@@ -1677,9 +1689,6 @@ const CSS = `
      border keeps separation from the ocean in every theme. */
   stroke: var(--cb-visited-stroke);
   stroke-width: 0.74;
-  filter:
-    drop-shadow(0 0 3px color-mix(in srgb, var(--cb-visited-base) 58%, transparent))
-    drop-shadow(0 0 8px color-mix(in srgb, #102f3a 44%, transparent));
 }
 .cb-country--wishlist {
   fill: var(--cb-wishlist-fill);
@@ -1696,15 +1705,18 @@ const CSS = `
      overpainted (polygons tile), and because the whole MultiPolygon is one
      path keyed by iso3 the fill covers every island and exclave too.
      The country keeps its normal boundary stroke (land/visited/wishlist);
-     only the fill changes. Overrides visited/wishlist fill so the
-     selection is always unambiguous — the CTA state in the detail panel
-     shows the visited/wishlist status instead. */
+     only the fill changes — flat, no glow (owner feedback: drop-shadows
+     read as smudge, and the accent+white fill is unambiguous on its own).
+     Overrides visited/wishlist fill so the selection is always clear —
+     the CTA state in the detail panel shows the status instead. */
   fill: var(--cb-selected-fill);
-  /* Accent glow hugs the filled territory so even one-pixel islands pop;
-     it follows the shape, not the border, so it reads as "this landmass is
-     lit", not as another outline. */
-  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--accent) 70%, transparent))
-          drop-shadow(0 0 7px color-mix(in srgb, var(--accent) 40%, transparent));
+}
+/* Status filter mirror — countries outside the active filter fade back so
+   the matching set reads at a glance. Opacity (not a fill swap) keeps the
+   visited/wishlist hue legible through the fade, and the dimmed paths stay
+   tappable so the user can still select and mark them. */
+.cb-country--dimmed {
+  opacity: 0.3;
 }
 /* /mobius-ui:Globe */
 
@@ -1750,11 +1762,11 @@ const CSS = `
   background: color-mix(in srgb, var(--text) 24%, transparent);
 }
 .cb-sheet-search {
-  flex-shrink: 0;
+  flex: 1 1 auto;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 10px;
-  margin: 4px 14px 10px;
   padding: 10px 14px;
   border-radius: 14px;
   background: var(--cb-surface);
@@ -1795,6 +1807,49 @@ const CSS = `
   cursor: pointer;
 }
 /* /mobius-ui:Sheet */
+
+/* Search + status-filter row above the list. The search pill flexes to
+   fill; the chips keep fixed 44px touch targets. */
+.cb-sheet-controls {
+  flex-shrink: 0;
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  margin: 4px 14px 10px;
+}
+.cb-filters {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+}
+.cb-filter {
+  width: 44px;
+  min-height: 44px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 14px;
+  border: 1px solid var(--cb-border);
+  background: var(--cb-surface);
+  color: var(--muted);
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: background 160ms ease, color 160ms ease, border-color 160ms ease;
+}
+.cb-filter:active {
+  transform: scale(0.94);
+}
+.cb-filter.is-on {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  color: var(--accent);
+}
+@media (hover: hover) {
+  .cb-filter:hover { color: var(--text); }
+  .cb-filter.is-on:hover { color: var(--accent); }
+}
 
 /* mobius-ui:Card v1 — keep in sync; library candidate. Diverge below the marker only. */
 /* Detail panel and list panel sit in the same flex slot. Exactly one
@@ -1948,31 +2003,6 @@ const CSS = `
   font-size: 12px;
   color: var(--muted);
 }
-.cb-row-badge {
-  /* Accent-tinted check — only shown when the country is visited.
-     Pure decoration; the row click opens detail where the actual
-     toggle lives. */
-  min-width: 28px;
-  height: 28px;
-  padding: 0 8px;
-  display: grid;
-  place-items: center;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--cb-visited-fill) 20%, transparent);
-  color: var(--cb-visited-fill);
-  font-size: 14px;
-  font-weight: 700;
-}
-.cb-row-badge--wishlist {
-  background: color-mix(in srgb, var(--cb-wishlist) 18%, transparent);
-  color: var(--cb-wishlist);
-}
-.cb-row-chevron {
-  color: var(--muted);
-  font-size: 22px;
-  line-height: 1;
-  padding-right: 4px;
-}
 /* One-tap visited toggle on each list row: mark a country without opening
    its detail (tap stops propagation). 40px hit target around a 26px ring;
    fills accent with a check when visited. The owner's core flow is bulk-
@@ -2067,17 +2097,19 @@ export default function Atlas({ appId, token }) {
   const [wishlist, setWishlist] = useState(() => new Set())
   const [selectedIso3, setSelectedIso3] = useState('')
   const [query, setQuery] = useState('')
-  const [focusRequest, setFocusRequest] = useState(null)
+  // Status filter (all / visited / wishlist) — persisted per device via the
+  // localStorage cache (it's a view preference, not data worth a server
+  // round-trip), restored on boot so the list opens the way it was left.
+  const [statusFilter, setStatusFilter] = useState(() => {
+    const saved = cacheRead(appId, 'status-filter')
+    return STATUS_FILTERS.includes(saved) ? saved : 'all'
+  })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  // Track online status + outbox depth so the user can see whether their
-  // last tap actually reached the server. We poll pendingCount() lazily —
-  // once after every set/remove and on a slow 10s interval — rather than
-  // subscribing to a runtime event the platform doesn't expose.
+  // Track online status so the SyncPill can announce offline mode.
   const [online, setOnline] = useState(
     typeof navigator !== 'undefined' ? navigator.onLine !== false : true,
   )
-  const [pending, setPending] = useState(0)
   // Distinguishes "fetched empty list" from "couldn't fetch at all". When
   // offline, storage.get returns null; the boot path flips this flag so we
   // can render an "offline — using last-known state" banner instead of
@@ -2186,27 +2218,19 @@ export default function Atlas({ appId, token }) {
     boot().catch(() => {})
   }, [boot])
 
-  // Online/offline tracking. We listen to the browser events directly
-  // (the runtime doesn't proxy them) and refresh pending count on each
-  // transition so the pill updates immediately when the outbox drains.
+  // Online/offline tracking. We listen to the browser events directly —
+  // the runtime doesn't proxy them.
   useEffect(() => {
     if (typeof window === 'undefined') return undefined
-    const refresh = () => {
-      setOnline(navigator.onLine !== false)
-      storage.pendingCount().then(setPending).catch(() => {})
-    }
+    const refresh = () => setOnline(navigator.onLine !== false)
     refresh()
     window.addEventListener('online', refresh)
     window.addEventListener('offline', refresh)
-    // Slow poll catches drains that happen without a window event (the
-    // runtime flushes on focus/visibility too, which don't fire 'online').
-    const id = setInterval(refresh, 10000)
     return () => {
       window.removeEventListener('online', refresh)
       window.removeEventListener('offline', refresh)
-      clearInterval(id)
     }
-  }, [storage])
+  }, [])
 
   // When the browser reconnects after an offline cold-start, retry boot
   // so the empty globe gets populated. boot() is idempotent and guards
@@ -2222,19 +2246,25 @@ export default function Atlas({ appId, token }) {
     return () => window.removeEventListener('online', onOnline)
   }, [boot, countries.length])
 
-  // ----- derived list (filtered + sorted) ------------------------------
+  // ----- derived list (ordered, then narrowed) --------------------------
+  // Order is alphabetical and never depends on marking — see
+  // orderCountriesForList. The status filter narrows; it doesn't re-sort.
   const filteredCountries = useMemo(() => {
-    return orderCountriesForList(countries, visited, wishlist, query)
-  }, [countries, query, visited, wishlist])
+    const ordered = orderCountriesForList(countries, query)
+    return filterCountriesByStatus(ordered, statusFilter, visited, wishlist)
+  }, [countries, query, statusFilter, visited, wishlist])
+
+  const changeStatusFilter = useCallback(
+    (next) => {
+      if (!STATUS_FILTERS.includes(next)) return
+      setStatusFilter(next)
+      cacheWrite(appId, 'status-filter', next)
+    },
+    [appId],
+  )
 
   const visitedCount = visited.size
   const totalCount = countries.length
-
-  // ----- actions -------------------------------------------------------
-  const focusCountry = useCallback((country, duration = PAN_DURATION_MS) => {
-    if (!country) return
-    setFocusRequest({ iso3: country.iso3, duration, stamp: Date.now() })
-  }, [])
 
   // ----- nav state machine --------------------------------------------
   // navStateRef holds the current state without forcing a re-render; the
@@ -2441,7 +2471,6 @@ export default function Atlas({ appId, token }) {
             await storage.set('wishlist.json', wishlistSnapshot)
             cacheWrite(appId, 'visited.json', visitedSnapshot)
             cacheWrite(appId, 'wishlist.json', wishlistSnapshot)
-            storage.pendingCount().then(setPending).catch(() => {})
           } catch (err) {
             // eslint-disable-next-line no-console
             console.error('Atlas:save failed', err)
@@ -2535,23 +2564,15 @@ export default function Atlas({ appId, token }) {
         </h1>
         <div className="cb-header-meta">
           <SyncPill online={online} hasRuntime={storage.hasRuntime()} />
+          {/* Just the count over the total — the percentage chip was
+              dropped as a redundant derived stat (the headline already
+              narrates progress, and small screens hid it anyway). */}
           <div
             className={'cb-counter' + (offlineBoot ? ' cb-counter--faded' : '')}
-            aria-label={
-              totalCount > 0
-                ? `${visitedCount} of ${totalCount} countries visited, ${Math.round(
-                    (visitedCount / totalCount) * 100,
-                  )} percent`
-                : `${visitedCount} of ${totalCount} countries visited`
-            }
+            aria-label={`${visitedCount} of ${totalCount} countries visited`}
           >
             <strong>{visitedCount}</strong>
             <span>/ {totalCount || '…'}</span>
-            {totalCount > 0 ? (
-              <span className="cb-counter-pct">
-                {Math.round((visitedCount / totalCount) * 100)}%
-              </span>
-            ) : null}
           </div>
         </div>
       </header>
@@ -2579,7 +2600,7 @@ export default function Atlas({ appId, token }) {
             visited={visited}
             wishlist={wishlist}
             selectedIso3={selectedIso3}
-            focusRequest={focusRequest}
+            statusFilter={statusFilter}
             onTapCountry={selectCountry}
             onTapOcean={deselect}
           />
@@ -2592,7 +2613,9 @@ export default function Atlas({ appId, token }) {
         wishlist={wishlist}
         selectedCountry={selectedCountry}
         query={query}
+        statusFilter={statusFilter}
         onQueryChange={setQuery}
+        onFilterChange={changeStatusFilter}
         onSelect={selectCountry}
         onToggleVisited={toggleVisited}
         onToggleWishlist={toggleWishlist}

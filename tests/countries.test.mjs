@@ -23,8 +23,10 @@ const {
   CACHE_KEY,
   LEGACY_CACHE_KEY,
   ROTATION_SINGULARITY_LAT,
+  STATUS_FILTERS,
   cacheRead,
   cacheWrite,
+  filterCountriesByStatus,
   nextDragRotation,
   orderCountriesForList,
   toggleCountryStatus,
@@ -39,37 +41,70 @@ const countries = [
   { iso3: 'BBB', iso2: 'BB', displayName: 'Same Name', region: 'Tie' },
 ]
 
-test('orderCountriesForList orders visited, wishlist, then rest alphabetically within each group', () => {
-  const ordered = orderCountriesForList(
-    countries,
-    new Set(['JPN', 'CAN']),
-    new Set(['USA']),
-  )
+test('orderCountriesForList orders alphabetically with an iso3 tiebreak', () => {
+  const ordered = orderCountriesForList(countries)
   assert.deepEqual(ordered.map((country) => country.iso3), [
+    'BRA',
     'CAN',
     'JPN',
-    'USA',
-    'BRA',
     'AAA',
     'BBB',
+    'USA',
   ])
 })
 
 test('orderCountriesForList filters sparse data and searches names, regions, and iso codes', () => {
   assert.deepEqual(
-    orderCountriesForList([null, ...countries], [], [], 'amer').map((country) => country.iso3),
+    orderCountriesForList([null, ...countries], 'amer').map((country) => country.iso3),
     ['BRA', 'CAN', 'USA'],
   )
   assert.deepEqual(
-    orderCountriesForList(countries, [], [], 'jp').map((country) => country.iso3),
+    orderCountriesForList(countries, 'jp').map((country) => country.iso3),
     ['JPN'],
   )
   assert.deepEqual(orderCountriesForList(undefined), [])
 })
 
-test('orderCountriesForList gives visited priority when a malformed persisted wishlist also contains the country', () => {
-  const ordered = orderCountriesForList(countries, ['USA'], ['USA', 'CAN'])
-  assert.deepEqual(ordered.slice(0, 2).map((country) => country.iso3), ['USA', 'CAN'])
+test('list order is stable under marking — toggling visited/wishlist never moves a row', () => {
+  const before = orderCountriesForList(countries)
+  const rowIndex = before.findIndex((country) => country.iso3 === 'JPN')
+
+  // Simulate the app flow: mark Japan visited, then re-derive the list the
+  // way the component does (order, then narrow with the 'all' filter).
+  const { visited, wishlist } = toggleCountryStatus(new Set(), new Set(), 'JPN', 'visited')
+  const after = filterCountriesByStatus(orderCountriesForList(countries), 'all', visited, wishlist)
+
+  assert.deepEqual(
+    after.map((country) => country.iso3),
+    before.map((country) => country.iso3),
+  )
+  assert.equal(after.findIndex((country) => country.iso3 === 'JPN'), rowIndex)
+})
+
+test('filterCountriesByStatus narrows to visited or wishlist and passes everything for all', () => {
+  const ordered = orderCountriesForList(countries)
+  const visited = new Set(['JPN', 'CAN'])
+  const wishlist = new Set(['USA'])
+
+  assert.deepEqual(
+    filterCountriesByStatus(ordered, 'visited', visited, wishlist).map((c) => c.iso3),
+    ['CAN', 'JPN'],
+  )
+  assert.deepEqual(
+    filterCountriesByStatus(ordered, 'wishlist', visited, wishlist).map((c) => c.iso3),
+    ['USA'],
+  )
+  assert.equal(filterCountriesByStatus(ordered, 'all', visited, wishlist), ordered)
+  assert.deepEqual(filterCountriesByStatus(undefined, 'visited', visited, wishlist), [])
+})
+
+test('filterCountriesByStatus gives visited priority when a malformed persisted wishlist also contains the country', () => {
+  const wishlistOnly = filterCountriesByStatus(countries, 'wishlist', ['USA'], ['USA', 'CAN'])
+  assert.deepEqual(wishlistOnly.map((c) => c.iso3), ['CAN'])
+})
+
+test('STATUS_FILTERS lists the three chip states with all first', () => {
+  assert.deepEqual(STATUS_FILTERS, ['all', 'visited', 'wishlist'])
 })
 
 test('toggleCountryStatus adds visited and removes the same country from wishlist', () => {
