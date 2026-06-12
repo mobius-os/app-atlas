@@ -1319,48 +1319,28 @@ function BottomSheet({
 }
 
 // --------------------------------------------------------------------------
-// Sync pill — surfaces outbox depth + offline state next to the counter.
+// Sync pill — surfaces offline state next to the counter.
 // --------------------------------------------------------------------------
-// Three observable states, in priority order:
-//   pending > 0  → "Offline · N pending" / "Saving · N pending"
-//   offline      → "Offline"
-//   online + 0   → null (the steady state hides the pill so we don't
-//                  clutter the header with "Saved" forever)
+// Only the offline state is surfaced. Local saves are instant and reliable;
+// outbox depth ("Saving · N pending") is internal plumbing the owner doesn't
+// need to read. Online → null (clean steady state).
 // hasRuntime=false means the runtime didn't load (dev/fallback) — writes
 // go direct to the server, so there's no outbox to surface. Hide the pill
 // in that mode rather than lie about a queue that doesn't exist.
-function SyncPill({ online, pending, hasRuntime }) {
+function SyncPill({ online, hasRuntime }) {
   if (!hasRuntime) return null
-  if (pending > 0) {
-    const label = online
-      ? `Saving · ${pending} pending`
-      : `Offline · ${pending} pending`
-    return (
-      <span
-        className={'cb-pill cb-pill--pending' + (online ? '' : ' cb-pill--offline')}
-        role="status"
-        aria-live="polite"
-        title="Your changes are saved locally and will sync when you're back online."
-      >
-        <span className="cb-pill-dot" aria-hidden="true" />
-        {label}
-      </span>
-    )
-  }
-  if (!online) {
-    return (
-      <span
-        className="cb-pill cb-pill--offline"
-        role="status"
-        aria-live="polite"
-        title="You're offline — taps will sync when you're back online."
-      >
-        <span className="cb-pill-dot" aria-hidden="true" />
-        Offline
-      </span>
-    )
-  }
-  return null
+  if (online) return null
+  return (
+    <span
+      className="cb-pill cb-pill--offline"
+      role="status"
+      aria-live="polite"
+      title="You're offline — taps will sync when you're back online."
+    >
+      <span className="cb-pill-dot" aria-hidden="true" />
+      Offline
+    </span>
+  )
 }
 
 // --------------------------------------------------------------------------
@@ -2554,7 +2534,7 @@ export default function Atlas({ appId, token }) {
             : `${visitedCount} stamps on the map.`}
         </h1>
         <div className="cb-header-meta">
-          <SyncPill online={online} pending={pending} hasRuntime={storage.hasRuntime()} />
+          <SyncPill online={online} hasRuntime={storage.hasRuntime()} />
           <div
             className={'cb-counter' + (offlineBoot ? ' cb-counter--faded' : '')}
             aria-label={
