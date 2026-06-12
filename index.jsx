@@ -165,7 +165,13 @@ function pinchSpread(pointers) {
 // Initial rotation — Western Europe slightly above the equator. Easier to
 // recognize than 0,0 (which puts the user in the Atlantic).
 const INITIAL_ROTATION = [12, -22, 0]
-export const ROTATION_SINGULARITY_LAT = 84.5
+// Closest the view-centre is allowed to approach a pole. The globe stays
+// north-up (roll = 0), so this is a real ceiling — but it's reached via a
+// smooth ease (see softClampLat), not a hard wall.
+export const ROTATION_SINGULARITY_LAT = 88
+// Below this latitude, dragging is exact 1:1 versor manipulation. Past it we
+// ease latitude toward the ceiling and damp longitude (see nextDragRotation).
+const POLE_EASE_START = 72
 
 // Zoom — a multiplier on the size-derived base radius (1 = the default
 // "fits the canvas" globe). Kept as a multiplier, not an absolute pixel
@@ -182,13 +188,34 @@ const MAX_ZOOM = 6
 const ZOOM_STEP = 1.4
 
 const isRotationSingular = (rotation) => Math.abs(rotation?.[1] || 0) >= ROTATION_SINGULARITY_LAT
-const clampDragLatitude = (lat) => clamp(lat, -ROTATION_SINGULARITY_LAT, ROTATION_SINGULARITY_LAT)
+// Smoothly compress latitude near the poles instead of slamming a hard clamp.
+// tanh asymptotes toward the ceiling, so the drag *eases* into the pole — no
+// wall to fight, no abrupt stop.
+const softClampLat = (lat) => {
+  const a = Math.abs(lat)
+  if (a <= POLE_EASE_START) return lat
+  const range = 90 - POLE_EASE_START // headroom above the ease point
+  const cap = ROTATION_SINGULARITY_LAT - POLE_EASE_START // how far past it we allow
+  const t = (a - POLE_EASE_START) / range // 0 at the ease point, grows past 1
+  return Math.sign(lat) * (POLE_EASE_START + cap * Math.tanh(t))
+}
+// Shortest signed angular delta a→b in degrees, wrapped to (-180, 180].
+const shortestLngDelta = (a, b) => ((b - a + 540) % 360) - 180
 export const nextDragRotation = (current, lng, lat) => {
-  const nextLat = clampDragLatitude(lat)
-  if (isRotationSingular(current) && Math.abs(nextLat) >= ROTATION_SINGULARITY_LAT) {
-    return null
+  const nextLat = softClampLat(lat)
+  const a = Math.abs(nextLat)
+  // Near a pole a tiny horizontal drag maps to a huge longitude swing — that's
+  // what read as "singular/twitchy". Damp the longitude step (only inside the
+  // polar cap, never to zero) so the spin stays calm while the rest of the
+  // globe keeps exact grab-and-drag tracking.
+  let factor = 1
+  if (a > POLE_EASE_START) {
+    const t = Math.min(1, (a - POLE_EASE_START) / (90 - POLE_EASE_START))
+    factor = 1 - 0.85 * t // eases down to 0.15 at the pole, never fully locked
   }
-  return [lng, nextLat, 0]
+  const prevLng = current?.[0] ?? 0
+  const nextLng = prevLng + shortestLngDelta(prevLng, lng) * factor
+  return [nextLng, nextLat, 0]
 }
 
 // localStorage cache keys — the offline runtime caches storage.get reads

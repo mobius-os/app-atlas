@@ -139,14 +139,20 @@ test('toggleCountryStatus is pure and ignores empty or unknown operations', () =
   assert.deepEqual([...unknown.wishlist], ['CAN'])
 })
 
-test('nextDragRotation clamps at the pole but still lets the user drag back out', () => {
-  assert.deepEqual(nextDragRotation([0, 0, 0], 12, 90), [
-    12,
-    ROTATION_SINGULARITY_LAT,
-    0,
-  ])
-  assert.equal(nextDragRotation([12, ROTATION_SINGULARITY_LAT, 0], 18, 90), null)
-  assert.deepEqual(nextDragRotation([12, ROTATION_SINGULARITY_LAT, 0], 18, 80), [18, 80, 0])
+test('nextDragRotation is exact 1:1 away from the poles and eases into them', () => {
+  // Below the polar cap dragging is exact versor tracking.
+  assert.deepEqual(nextDragRotation([0, 0, 0], 12, 45), [12, 45, 0])
+  // Crossing the antimeridian takes the short way, not a 360° spin-around.
+  assert.deepEqual(nextDragRotation([170, 0, 0], -170, 0), [190, 0, 0])
+
+  // Dragging to the pole eases latitude toward the ceiling (never reaching
+  // it) and damps — but never locks — the longitude step.
+  const atPole = nextDragRotation([0, 0, 0], 12, 90)
+  assert.ok(atPole[1] > 72 && atPole[1] < ROTATION_SINGULARITY_LAT)
+  assert.ok(atPole[0] > 0 && atPole[0] < 12)
+
+  // No dead zone at the top — dragging back out is always possible.
+  assert.deepEqual(nextDragRotation([12, 84, 0], 18, 60), [18, 60, 0])
 })
 
 test('cacheRead migrates the old Visited localStorage prefix to Atlas', () => {
