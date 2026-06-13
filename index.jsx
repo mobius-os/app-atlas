@@ -1569,18 +1569,34 @@ const CSS = `
   min-width: 0;
   line-height: 1.15;
 }
-/* Atlas's signature header: an uppercase letter-spaced eyebrow above a
-   changing sentence ("12 stamps on the map."). Intentional divergence
-   from the canonical brand-mark + title + subtitle Header shape; kept as
-   the app's identity. */
-.cb-header h1 span.cb-eyebrow {
+/* Brand mark: the app's real glossy icon, no name text. The changing
+   sentence ("12 stamps on the map.") sits beside it as status, not
+   identity. */
+.cb-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.cb-brand-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex-shrink: 0;
   display: block;
-  font-size: 11px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--muted);
-  font-weight: 500;
-  margin-bottom: 2px;
+}
+.cb-brand-fallback {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent, currentColor);
+  color: var(--bg, #0c0c0c);
+  font-weight: 700;
+  line-height: 1;
 }
 .cb-header-meta {
   display: inline-flex;
@@ -2632,14 +2648,31 @@ export default function Atlas({ appId, token }) {
       <style>{CSS}</style>
 
       <header className="cb-header">
-        <h1>
-          <span className="cb-eyebrow">Atlas</span>
-          {visitedCount === 0
-            ? 'Tap a country.'
-            : visitedCount === 1
-            ? 'First stamp.'
-            : `${visitedCount} stamps on the map.`}
-        </h1>
+        <div className="cb-brand">
+          {/* The app's own glossy icon as the brand mark (downscaled +
+              cached); the accent dot is the fallback when this install has
+              no custom icon and the route 404s. */}
+          <img
+            src={`/api/apps/${appId}/icon?size=64`}
+            alt=""
+            width={26}
+            height={26}
+            className="cb-brand-icon"
+            onError={(e) => {
+              e.currentTarget.style.display = 'none'
+              const f = e.currentTarget.nextElementSibling
+              if (f) f.style.display = 'flex'
+            }}
+          />
+          <span className="cb-brand-fallback" style={{ display: 'none' }} aria-hidden="true">·</span>
+          <h1>
+            {visitedCount === 0
+              ? 'Tap a country.'
+              : visitedCount === 1
+              ? 'First stamp.'
+              : `${visitedCount} stamps on the map.`}
+          </h1>
+        </div>
         <div className="cb-header-meta">
           <SyncPill online={online} hasRuntime={storage.hasRuntime()} />
           {/* Just the count over the total — the percentage chip was
