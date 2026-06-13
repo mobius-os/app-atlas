@@ -187,6 +187,23 @@ const MAX_ZOOM = 6
 // "a few taps" rather than a slow crawl.
 const ZOOM_STEP = 1.4
 
+// Max degrees of rotation a single versor drag frame is allowed to apply.
+// Near the visible limb the orthographic foreshortening blows up — a 1px
+// pointer move there inverts to a huge angular sweep, so an edge swipe used
+// to "snap" the globe a quarter-turn in one frame. Capping the per-frame step
+// keeps the limb bounded without dampening normal centre-of-disc dragging
+// (real frames there move only a few degrees, well under the cap).
+const MAX_DRAG_STEP_DEG = 35
+
+// Total angular distance between two [lng, lat]° points on the sphere, in
+// degrees (the great-circle angle). Used to detect/cap a runaway versor frame.
+export const angularStepDeg = (a, b) => {
+  const va = versorCartesian(a)
+  const vb = versorCartesian(b)
+  const dot = Math.max(-1, Math.min(1, va[0] * vb[0] + va[1] * vb[1] + va[2] * vb[2]))
+  return Math.acos(dot) * RAD2DEG
+}
+
 const isRotationSingular = (rotation) => Math.abs(rotation?.[1] || 0) >= ROTATION_SINGULARITY_LAT
 // Smoothly compress latitude near the poles instead of slamming a hard clamp.
 // tanh asymptotes toward the ceiling, so the drag *eases* into the pole — no
@@ -709,6 +726,14 @@ function Globe({
           if (Math.abs(roll) > 90) return
           const next = nextDragRotation(rotationRef.current, lng, lat)
           if (!next) return
+          // Cap the per-frame angular velocity. Near the limb the inverse
+          // projection's gain explodes (a pixel maps to tens of degrees), so
+          // a swipe along the edge would otherwise snap the globe across the
+          // sphere in one frame. A frame that exceeds the cap is a limb
+          // artifact, not a deliberate fast spin (real frames are a few
+          // degrees) — hold the last good rotation so the edge swipe stays
+          // bounded. The next move re-solves from a sane baseline.
+          if (angularStepDeg(rotationRef.current, next) > MAX_DRAG_STEP_DEG) return
           // Keep north up (zero roll, clamp the pole): a free-tilting
           // globe reads as broken in a country picker.
           setRotationBoth(next)
@@ -1495,9 +1520,11 @@ const CSS = `
   inset: 0;
   display: flex;
   flex-direction: column;
-  background:
-    radial-gradient(120% 80% at 50% 0%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 70%),
-    var(--bg);
+  /* App-root/page background is the plain theme token, matching every other
+     Möbius app. The accent radial-gradient that used to sit here tinted the
+     whole page; the globe carries its own scene (ocean gradient, accent halo)
+     so the planet still reads as a planet without painting the chrome. */
+  background: var(--bg);
   color: var(--text);
   font-family: var(--font);
   overflow: hidden;
@@ -1806,11 +1833,35 @@ const CSS = `
   color: var(--muted);
 }
 .cb-sheet-search input {
-  flex: 1;
+  /* width:100% + box-sizing keeps the field a constant width as the user
+     types — flex:1 alone let WebKit's intrinsic input sizing nudge the pill
+     wider/narrower per character, so the search box visibly reflowed. */
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   background: transparent;
   border: 0;
   color: var(--text);
   font: inherit;
+  /* Drop the native search affordance: type="search" paints WebKit's own
+     ::-webkit-search-cancel-button, which doubled up with the app's custom
+     clear button (two × glyphs). appearance:none removes the styled control
+     so only the app's button shows. */
+  appearance: none;
+  -webkit-appearance: none;
+}
+/* Belt-and-braces: some WebKit builds still draw the cancel button even with
+   appearance:none on the input, so hide the pseudo-element outright. */
+.cb-sheet-search input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
+.cb-sheet-search input::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
 }
 /* Keep the borderless look for mouse focus; the shared Focus block
    still paints a keyboard ring on :focus-visible. */
