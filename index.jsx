@@ -1579,16 +1579,16 @@ const CSS = `
   min-width: 0;
 }
 .cb-brand-icon {
-  width: 26px;
-  height: 26px;
+  width: 34px;
+  height: 34px;
   border-radius: 6px;
   object-fit: cover;
   flex-shrink: 0;
   display: block;
 }
 .cb-brand-fallback {
-  width: 26px;
-  height: 26px;
+  width: 34px;
+  height: 34px;
   border-radius: 6px;
   flex-shrink: 0;
   align-items: center;
@@ -2655,8 +2655,8 @@ export default function Atlas({ appId, token }) {
           <img
             src={`/api/apps/${appId}/icon?size=64`}
             alt=""
-            width={26}
-            height={26}
+            width={34}
+            height={34}
             className="cb-brand-icon"
             onError={(e) => {
               e.currentTarget.style.display = 'none'
