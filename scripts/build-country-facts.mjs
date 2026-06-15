@@ -20,8 +20,13 @@
 //   { "<iso3>": { cap: <capital>, pop: <population>, area: <km²>, lang: [..] } }
 //
 // Run:  node scripts/build-country-facts.mjs
-// The emitted country-facts.json is committed and added to the manifest
-// (storage_seeds + offline.precache) so it ships and precaches with the app.
+// country-facts.json is committed as the human-readable regeneration source,
+// but Möbius mini-apps compile to a SINGLE file at install (esbuild on
+// index.jsx alone — sibling imports don't resolve), so the LIVE data must be
+// inlined in index.jsx. This script therefore also rewrites the
+// `const COUNTRY_FACTS = {...}` between the COUNTRY_FACTS:BEGIN/END markers in
+// index.jsx, keeping the app single-file and the const in lockstep with the
+// JSON. Edit the data here, never by hand in index.jsx.
 
 import { readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -110,8 +115,25 @@ if (missingPopulation.length) {
   console.warn('No population for (will render "—"):', missingPopulation)
 }
 
+// Compact (no pretty-print) — this object is inlined into the JS bundle.
+const json = JSON.stringify(facts)
+const bytes = Buffer.byteLength(json)
+
 const out = join(repoRoot, 'country-facts.json')
-// Compact (no pretty-print) — this file ships in the app bundle.
-writeFileSync(out, JSON.stringify(facts))
-const bytes = Buffer.byteLength(JSON.stringify(facts))
+writeFileSync(out, json)
 console.log(`Wrote ${out} — ${Object.keys(facts).length} countries, ${bytes} bytes`)
+
+// Inline the same data into index.jsx between the markers so the app stays
+// single-file (the install compile can't resolve a sibling ./country-facts.json
+// import). Fail loudly if the markers are missing rather than silently leaving
+// index.jsx stale.
+const indexPath = join(repoRoot, 'index.jsx')
+const indexSrc = readFileSync(indexPath, 'utf8')
+const markerRe = /(\/\/ COUNTRY_FACTS:BEGIN[^\n]*\n)const COUNTRY_FACTS = [\s\S]*?(\n\/\/ COUNTRY_FACTS:END)/
+if (!markerRe.test(indexSrc)) {
+  console.error('index.jsx is missing the COUNTRY_FACTS:BEGIN/END markers — cannot inline.')
+  process.exit(1)
+}
+const nextIndex = indexSrc.replace(markerRe, `$1const COUNTRY_FACTS = ${json}$2`)
+writeFileSync(indexPath, nextIndex)
+console.log(`Inlined COUNTRY_FACTS into ${indexPath}`)
