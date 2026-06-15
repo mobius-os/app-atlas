@@ -611,12 +611,13 @@ function Globe({
   const [depAttempt, setDepAttempt] = useState(0)
   const [depFailed, setDepFailed] = useState(false)
 
-  // d3-geo lives at runtime — declared in manifest.runtime.esm_deps so the
-  // install UI warns the user. Bundle suffix flattens the dep graph into a
-  // single ES module so esm.sh doesn't ship a waterfall of small chunks.
-  // A 5s timeout races the import so an offline cold-start can't hang on
-  // the fetch indefinitely. depAttempt is in the dep array so the
-  // reconnect retry below can force another attempt.
+  // d3-geo lives at runtime — resolved by the app frame's import map to the
+  // self-hosted /vendor/d3-geo@3 bundle (no longer esm.sh), so the globe works
+  // offline-deterministically with no third-party CDN hop. A 5s timeout still
+  // races the import so a cold-start can't hang on the fetch indefinitely (the
+  // same-origin /vendor module is normally instant, but the SW may be priming).
+  // depAttempt is in the dep array so the reconnect retry below can force
+  // another attempt.
   useEffect(() => {
     let active = true
     const timeoutMs = 5000
@@ -625,7 +626,7 @@ function Globe({
       timeoutId = setTimeout(() => reject(new Error('d3-geo load timed out')), timeoutMs)
     })
     setDepFailed(false)
-    Promise.race([import('https://esm.sh/d3-geo@3?bundle'), timeoutPromise])
+    Promise.race([import('d3-geo'), timeoutPromise])
       .then((mod) => {
         clearTimeout(timeoutId)
         if (!active) return
@@ -644,9 +645,10 @@ function Globe({
     }
   }, [depAttempt])
 
-  // When the browser reconnects, retry the d3-geo import if it failed.
-  // The offline copy at esm.sh will land via the SW cache; this just kicks
-  // the effect to actually try.
+  // When the browser reconnects, retry the d3-geo import if it failed. The
+  // /vendor copy is precached by the SW, so this is just belt-and-braces for a
+  // cold start that timed out before the precache settled; it kicks the effect
+  // to try again.
   useEffect(() => {
     if (typeof window === 'undefined') return undefined
     const retry = () => {

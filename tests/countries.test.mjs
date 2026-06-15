@@ -11,6 +11,12 @@ execFileSync(esbuild, [
   '--format=esm',
   '--jsx=automatic',
   '--platform=node',
+  // d3-geo is resolved at runtime by the app frame's import map (vendored under
+  // /vendor/d3-geo@3) — not bundled. The Möbius compiler externalizes it via
+  // RUNTIME_LIBS; mark it external here too so this test compiles the exact
+  // source the compiler ships. (When it was a https://esm.sh/... URL esbuild
+  // treated it as external automatically; the bare specifier needs this flag.)
+  '--external:d3-geo',
   'index.jsx',
   '--outfile=tests/.build/index.mjs',
 ], {
