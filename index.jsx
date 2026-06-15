@@ -1,5 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+// Per-country basic facts (capital / population / surface area / languages),
+// keyed by ISO-3 under short keys { cap, pop, area, lang }. BUNDLED at build
+// time from world-countries + country-json (see scripts/build-country-facts.mjs)
+// and imported directly into the JS bundle — Atlas runs under CSP
+// connect-src 'self' and must never fetch country data from an external API at
+// runtime. A direct import means the facts ship inside app-<id>.js: always
+// present, fully offline, no storage round-trip. Regenerate with
+// `npm run build:facts` whenever the geometry seed or source datasets change.
+import COUNTRY_FACTS from './country-facts.json'
+
 // --------------------------------------------------------------------------
 // Storage shim — probe runtime on every call, fall back to fetch on miss.
 // --------------------------------------------------------------------------
@@ -90,6 +100,37 @@ function makeStorage({ appId, token }) {
 // --------------------------------------------------------------------------
 const soften = (value) => String(value || '').toLowerCase().trim()
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value))
+
+// Hero sayings — the short line beside the brand mark. One is picked at random
+// on mount and re-rolls every ROTATING_SAYING_INTERVAL_MS, never repeating the
+// line it's replacing (see pickRotatingSaying). This is the ONLY editable copy
+// surface: keep the phrases short and tasteful. EMPTY THE ARRAY to render no
+// line at all — the header simply omits it, so clearing this list cleanly
+// removes the hero copy with no other change.
+const ROTATING_SAYINGS = [
+  'The world is your oyster.',
+  'Not all who wander are lost.',
+  'Go see for yourself.',
+  'The map is not the territory.',
+  'Adventure is out there.',
+  'Wherever you go, go with all your heart.',
+]
+// How long each saying shows before the next random pick.
+const ROTATING_SAYING_INTERVAL_MS = 9000
+
+// Pick the next saying index at random WITHOUT repeating the one on screen.
+// Returns -1 when the list is empty (the caller renders nothing) and stays put
+// when the list has a single entry (no other choice). `random` is injected so
+// the rotation is unit-testable; it defaults to Math.random in the app.
+export function pickRotatingSaying(sayings, currentIndex, random = Math.random) {
+  if (!Array.isArray(sayings) || sayings.length === 0) return -1
+  if (sayings.length === 1) return 0
+  let next = Math.floor(random() * sayings.length)
+  if (next >= sayings.length) next = sayings.length - 1 // guard random()===1
+  // Avoid a back-to-back repeat: step one forward and wrap.
+  if (next === currentIndex) next = (next + 1) % sayings.length
+  return next
+}
 
 // Versor (unit-quaternion) helpers for "grab the surface" dragging. A fixed
 // deg/px drag can't track the surface: on an orthographic globe the same
@@ -187,21 +228,63 @@ const MAX_ZOOM = 6
 // "a few taps" rather than a slow crawl.
 const ZOOM_STEP = 1.4
 
-// Max degrees of rotation a single versor drag frame is allowed to apply.
-// Near the visible limb the orthographic foreshortening blows up — a 1px
-// pointer move there inverts to a huge angular sweep, so an edge swipe used
-// to "snap" the globe a quarter-turn in one frame. Capping the per-frame step
-// keeps the limb bounded without dampening normal centre-of-disc dragging
-// (real frames there move only a few degrees, well under the cap).
-const MAX_DRAG_STEP_DEG = 35
-
 // Total angular distance between two [lng, lat]° points on the sphere, in
-// degrees (the great-circle angle). Used to detect/cap a runaway versor frame.
+// degrees (the great-circle angle). Used by tests to assert a near-edge drag
+// produces a bounded rotation (no runaway limb snap).
 export const angularStepDeg = (a, b) => {
   const va = versorCartesian(a)
   const vb = versorCartesian(b)
   const dot = Math.max(-1, Math.min(1, va[0] * vb[0] + va[1] * vb[1] + va[2] * vb[2]))
   return Math.acos(dot) * RAD2DEG
+}
+
+// Soft-ease the pointer's distance-from-centre toward (but never past) the
+// sphere's silhouette before inverting it. THIS is the fix for the owner's
+// "I drag the globe but at the left/right boundaries it moves nonlinearly —
+// a bit too abrupt." On an orthographic globe the inverse projection maps the
+// normalized disc radius ρ∈[0,1] to colatitude asin(ρ); its angular gain
+// d(asin ρ)/dρ = 1/√(1−ρ²) DIVERGES at the limb (ρ→1). So the last few percent
+// of the disc already sweep a steeply-accelerating angle (gain ≈ 7× at ρ=0.95,
+// ≈ 22× at ρ=0.999) — that ramp IS the abruptness. The previous fix HARD-clamped
+// ρ to a fixed 0.999 circle: it removed the runaway but introduced two
+// discontinuities of its own — the gain still spiked up to the wall, then every
+// pointer past it collapsed onto one frozen circle (slope 0 → a dead-zone). A
+// hard clamp can't feel smooth because its derivative is discontinuous.
+//
+// The smooth solution (the feel of travel apps like "Been"): keep the inner
+// disc EXACTLY 1:1 versor tracking, then ease ρ with a tanh falloff that
+// asymptotes to a sub-limb ceiling. The response stays naturally nonlinear (the
+// owner wants nonlinear) but its DERIVATIVE is continuous everywhere — no spike,
+// no wall, no freeze — and the inverse gain is bounded (≈ 5.8× max instead of
+// 22×+). A pointer dragged far off-disc keeps moving the globe a little further,
+// monotonically, instead of jumping or sticking. This mirrors the production
+// d3 globe-drag handlers (Fil's d3-inertia and vasturiano's d3-geo-zoom), which
+// invert the RAW pointer and simply skip the frame when invert returns NaN
+// off-disc — solveVersorDrag keeps that null-and-hold guard as a backstop; the
+// ease here is what makes the approach-to-the-edge itself smooth.
+// Sources: github.com/d3/versor, observablehq.com/@d3/versor-dragging (Bostock),
+// github.com/Fil/d3-inertia (`if (isNaN(inv[0])) return`), d3-geo-zoom.
+
+// Below this fraction of the radius the pointer is inverted unchanged — exact
+// 1:1 grab-and-drag tracking through the whole centre of the globe.
+const LIMB_EASE_START = 0.88
+// The eased radius asymptotes to this fraction of the radius and never reaches
+// the singular limb (ρ=1), which keeps the inverse gain bounded and finite.
+const LIMB_EASE_CEIL = 0.985
+export function easePointerToDisc(px, py, cx, cy, radius) {
+  const dx = px - cx
+  const dy = py - cy
+  const dist = Math.hypot(dx, dy)
+  if (!(radius > 0)) return [px, py]
+  const rho = dist / radius
+  if (!(rho > LIMB_EASE_START)) return [px, py] // inner disc: untouched, 1:1
+  // tanh eases the excess radius so the result rises from LIMB_EASE_START toward
+  // LIMB_EASE_CEIL, approaching but never crossing it — a continuous,
+  // monotone, bounded mapping (no clamp wall, no dead-zone).
+  const range = LIMB_EASE_CEIL - LIMB_EASE_START
+  const eased = LIMB_EASE_START + range * Math.tanh((rho - LIMB_EASE_START) / range)
+  const k = (eased * radius) / dist // dist > 0 here since rho > START ≥ 0
+  return [cx + dx * k, cy + dy * k]
 }
 
 const isRotationSingular = (rotation) => Math.abs(rotation?.[1] || 0) >= ROTATION_SINGULARITY_LAT
@@ -233,6 +316,82 @@ export const nextDragRotation = (current, lng, lat) => {
   const prevLng = current?.[0] ?? 0
   const nextLng = prevLng + shortestLngDelta(prevLng, lng) * factor
   return [nextLng, nextLat, 0]
+}
+
+// Solve one frame of versor drag: the rotation that carries the point first
+// grabbed (v0, captured at startRotate q0) to the point now under the pointer,
+// so the surface stays glued to the finger (Bostock/Davies versor dragging).
+// The pointer is first soft-eased inside the silhouette (easePointerToDisc) so
+// a near/over-edge pointer can't hit the limb singularity AND the approach to
+// the edge stays smooth — that ease is why dragging the boundary no longer
+// feels abrupt (the owner's report) and never "goes crazy". `makeProjection`
+// builds a d3 orthographic projection for a given rotation (injected so this is
+// pure and unit-testable with a real d3-geo but no DOM). Returns the next
+// [lng, lat, 0] rotation (north-up: roll is dropped and the pole is soft-
+// clamped via nextDragRotation), or null when the gesture should hold the last
+// good rotation (grab/here inverted off-sphere, or a pole-crossing roll flip).
+export function solveVersorDrag({ makeProjection, startRotate, v0, q0, current, px, py, cx, cy, radius }) {
+  if (!v0 || !q0) return null
+  const [cpx, cpy] = easePointerToDisc(px, py, cx, cy, radius)
+  const here = makeProjection(startRotate).invert([cpx, cpy])
+  if (!here || !Number.isFinite(here[0]) || !Number.isFinite(here[1])) return null
+  const q = versorMultiply(q0, versorDelta(v0, versorCartesian(here)))
+  const [lng, lat, roll] = versorToAngles(q)
+  // Past a pole the versor decode folds latitude back down (asin's [-90,90]
+  // range) and roll flips toward ±180° — the globe then appears to reverse.
+  // A large roll means the drag tried to cross the pole; hold the last good
+  // rotation so the vertical drag stays bounded by the N/S poles (the upright
+  // feel a country picker wants) instead of flipping past them.
+  if (Math.abs(roll) > 90) return null
+  // North-up: take the solved longitude/latitude, drop the roll, and soft-clamp
+  // the latitude near the poles. Away from the poles this is exact 1:1 versor
+  // tracking; the pixel clamp above already bounds the per-frame step (versor's
+  // own delta is an acos angle, intrinsically ≤180°), so no separate angle cap
+  // is needed — and removing that cap is what stops the freeze-then-jump.
+  return nextDragRotation(current, lng, lat)
+}
+
+// --------------------------------------------------------------------------
+// Country basic-info (Change 6).
+// --------------------------------------------------------------------------
+// Look up the bundled facts for a country and shape them for the info card.
+// Returns null when we have no facts row (the card then shows only what the
+// geometry seed already carries — region + flag). Pure and exported so the
+// data join is unit-testable without rendering.
+export function lookupCountryInfo(iso3, facts = COUNTRY_FACTS) {
+  if (!iso3 || !facts || typeof facts !== 'object') return null
+  const row = facts[iso3]
+  if (!row || typeof row !== 'object') return null
+  const languages = Array.isArray(row.lang) ? row.lang.filter(Boolean) : []
+  return {
+    capital: row.cap || '',
+    population: typeof row.pop === 'number' ? row.pop : null,
+    area: typeof row.area === 'number' ? row.area : null,
+    languages,
+  }
+}
+
+// Human-readable population — grouped thousands (1,393,409,038). Falls back to
+// an em dash so a missing value reads as "unknown", not "zero".
+export function formatPopulation(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '—'
+  return Math.round(value).toLocaleString('en-US')
+}
+
+// Human-readable surface area in km² with grouped thousands. Same em-dash
+// fallback as population so a missing area never renders a bare "0 km²".
+export function formatArea(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '—'
+  return `${Math.round(value).toLocaleString('en-US')} km²`
+}
+
+// Join the main languages into one readable string, capped so a multilingual
+// country (e.g. Switzerland's four) doesn't overflow the card.
+export function formatLanguages(languages, max = 3) {
+  if (!Array.isArray(languages) || languages.length === 0) return '—'
+  const shown = languages.slice(0, max)
+  const extra = languages.length - shown.length
+  return extra > 0 ? `${shown.join(', ')} +${extra}` : shown.join(', ')
 }
 
 // localStorage cache keys — the offline runtime caches storage.get reads
@@ -589,10 +748,12 @@ function Globe({
   const projectionData = useMemo(() => {
     if (!ready || !d3Ref.current || !size.width || !size.height) return null
     const d3 = d3Ref.current
-    // Base radius — 46% of the smaller dim fits the default globe with a
-    // comfortable margin. zoom (a multiplier) scales it; the radius below is
-    // the *visible* radius, so the halo/sphere geometry tracks the zoom too.
-    const radius = Math.min(size.width, size.height) * 0.46 * zoom
+    // Base radius — 52% of the smaller dim makes the default globe read as the
+    // hero of the screen (it was 46%, sized for the old half-height list; with
+    // the list now collapsed by default the globe has the room to be bigger).
+    // zoom (a multiplier) scales it; the radius below is the *visible* radius,
+    // so the halo/sphere geometry tracks the zoom too.
+    const radius = Math.min(size.width, size.height) * 0.52 * zoom
     const projection = d3
       .geoOrthographic()
       .translate([size.width / 2, size.height / 2])
@@ -623,7 +784,6 @@ function Globe({
       // Re-grab the versor baseline on the next move (see onPointerMove).
       v0: null,
       q0: null,
-      offSphere: false,
     }
   }
 
@@ -653,7 +813,6 @@ function Globe({
         // pointer's position relative to the SVG.
         v0: null,
         q0: null,
-        offSphere: false,
       }
     }
   }
@@ -682,70 +841,61 @@ function Globe({
     // at any zoom, viewport, and latitude. (A fixed deg/px slips — the same
     // finger travel sweeps a different angle as the on-screen radius and the
     // limb foreshortening change, which is why dragging never felt like the
-    // earth's surface.) Falls back to a radius-scaled deg/px when d3 isn't
-    // ready or the grab/pointer lands off the sphere.
+    // earth's surface.) The pointer is clamped just inside the silhouette before
+    // every invert (easePointerToDisc), so a drag that reaches the edge stays
+    // smooth and stable instead of snapping — see solveVersorDrag. Falls back to a
+    // radius-scaled deg/px only when d3 isn't ready yet.
     const d3 = d3Ref.current
     const drag = dragRef.current
-    if (d3 && projectionData && !drag.offSphere) {
+    if (d3 && projectionData) {
       const rect = event.currentTarget.getBoundingClientRect()
       const px = event.clientX - rect.left
       const py = event.clientY - rect.top
-      const projectionAt = (rot) =>
+      const cx = size.width / 2
+      const cy = size.height / 2
+      const radius = projectionData.radius
+      const makeProjection = (rot) =>
         d3
           .geoOrthographic()
-          .translate([size.width / 2, size.height / 2])
-          .scale(projectionData.radius)
+          .translate([cx, cy])
+          .scale(radius)
           .clipAngle(90)
           .rotate(rot)
-      // Capture the grab baseline on the first move of the gesture (and after
-      // a pinch hands control back). A grab that lands off the sphere marks the
-      // gesture linear so we stop retrying the invert.
+      // Capture the grab baseline on the first move of the gesture (and after a
+      // pinch hands control back). Soft-ease the grab pixel into the disc too, so
+      // a gesture that STARTS near the edge still anchors to a real surface point
+      // instead of falling back to the linear path.
       if (!drag.v0) {
-        const grab = projectionAt(rotationRef.current).invert([px, py])
+        const [gx, gy] = easePointerToDisc(px, py, cx, cy, radius)
+        const grab = makeProjection(rotationRef.current).invert([gx, gy])
         if (grab && Number.isFinite(grab[0]) && Number.isFinite(grab[1])) {
           drag.startRotate = rotationRef.current.slice()
           drag.v0 = versorCartesian(grab)
           drag.q0 = versorFromAngles(drag.startRotate)
-        } else {
-          drag.offSphere = true
         }
       }
       if (drag.v0) {
-        const here = projectionAt(drag.startRotate).invert([px, py])
-        if (here && Number.isFinite(here[0]) && Number.isFinite(here[1])) {
-          const q = versorMultiply(drag.q0, versorDelta(drag.v0, versorCartesian(here)))
-          const [lng, lat, roll] = versorToAngles(q)
-          // Past a pole the versor decode folds latitude back down (asin's
-          // [-90,90] range) and the roll flips toward ±180° — the globe then
-          // appears to reverse and spin the wrong way. A large roll means the
-          // drag tried to cross the pole; hold the last good rotation so the
-          // vertical drag stays bounded by the N/S poles (the upright feel the
-          // picker wants) instead of flipping past them. nextDragRotation's
-          // ±84.5 clamp can't catch this because the folded latitude lands back
-          // inside the clamp band.
-          if (Math.abs(roll) > 90) return
-          const next = nextDragRotation(rotationRef.current, lng, lat)
-          if (!next) return
-          // Cap the per-frame angular velocity. Near the limb the inverse
-          // projection's gain explodes (a pixel maps to tens of degrees), so
-          // a swipe along the edge would otherwise snap the globe across the
-          // sphere in one frame. A frame that exceeds the cap is a limb
-          // artifact, not a deliberate fast spin (real frames are a few
-          // degrees) — hold the last good rotation so the edge swipe stays
-          // bounded. The next move re-solves from a sane baseline.
-          if (angularStepDeg(rotationRef.current, next) > MAX_DRAG_STEP_DEG) return
-          // Keep north up (zero roll, clamp the pole): a free-tilting
-          // globe reads as broken in a country picker.
-          setRotationBoth(next)
-        }
-        // Pointer past the limb this frame → hold the last good rotation.
+        const next = solveVersorDrag({
+          makeProjection,
+          startRotate: drag.startRotate,
+          v0: drag.v0,
+          q0: drag.q0,
+          current: rotationRef.current,
+          px,
+          py,
+          cx,
+          cy,
+          radius,
+        })
+        // null → this frame would cross a pole or inverted off-sphere; hold the
+        // last good rotation (the gesture stays alive for the next move).
+        if (next) setRotationBoth(next)
         return
       }
     }
 
     // Fallback: radius-scaled deg/px — exact at the globe centre for any zoom
-    // and viewport. Used while d3 loads, or when the grab was off the sphere
-    // (e.g. on the surrounding glow), where versor has no anchor.
+    // and viewport. Used only while d3 loads (before the versor path can run).
     const degPerPx = projectionData ? RAD2DEG / projectionData.radius : 0.4 / zoomRef.current
     const [startLng, startLat] = drag.startRotate
     const next = nextDragRotation(rotationRef.current, startLng + dx * degPerPx, startLat - dy * degPerPx)
@@ -985,10 +1135,20 @@ function Globe({
 // --------------------------------------------------------------------------
 // Bottom sheet — vertically draggable list + search.
 // --------------------------------------------------------------------------
-const SHEET_MIN = 0.30  // 30% of viewport — collapsed
-const SHEET_MID = 0.50  // 50% — neutral
-const SHEET_MAX = 0.80  // 80% — expanded
+// The sheet opens COLLAPSED so the globe is the hero. SHEET_MIN ≈ 22% of the
+// viewport shows ~3 country rows on a phone (rows are ~62px; 22% of an ~800px
+// viewport ≈ 175px ≈ three rows + the search bar) and hands the rest of the
+// screen to the globe. The list still scrolls within that band, and the user
+// can drag the handle up to SHEET_MID / SHEET_MAX to browse the full list — the
+// collapsed default just stops the list from eating half the screen on open.
+const SHEET_MIN = 0.22  // ~22% of viewport — collapsed, ~3 rows; the open default
+const SHEET_MID = 0.50  // 50% — neutral, dragged-to
+const SHEET_MAX = 0.80  // 80% — expanded, dragged-to
 const SHEET_STOPS_DEFAULT = [SHEET_MIN, SHEET_MID, SHEET_MAX]
+// The fraction the sheet opens at. Collapsed by default (see above); kept as a
+// named const next to the stops so "how much screen the list takes on open" is
+// a single, obvious knob.
+const SHEET_OPEN_DEFAULT = SHEET_MIN
 
 // Icon-only filter chips — globe = everything, check = visited, star =
 // wishlist. Inline SVGs, not unicode glyphs, for the same reason as the
@@ -1071,10 +1231,20 @@ function BottomSheet({
   onToggleWishlist,
   onDeselect,
 }) {
-  const dragRef = useRef({ active: false, startY: 0, startFrac: SHEET_MID, fromBody: false })
-  const [frac, setFrac] = useState(SHEET_MID)
+  const dragRef = useRef({ active: false, startY: 0, startFrac: SHEET_OPEN_DEFAULT, fromBody: false })
+  const [frac, setFrac] = useState(SHEET_OPEN_DEFAULT)
   const [dragging, setDragging] = useState(false)
   const scrollRef = useRef(null)
+
+  // When a country opens, lift the sheet so the detail (info card + toggles) is
+  // visible. The collapsed default (SHEET_MIN) is great for browsing the globe
+  // but too short to show the detail — raise the sheet to at least the neutral
+  // stop, without ever shrinking a sheet the user has already dragged higher.
+  const selectedIso3 = selectedCountry?.iso3 || ''
+  useEffect(() => {
+    if (!selectedIso3) return
+    setFrac((current) => (current < SHEET_MID ? SHEET_MID : current))
+  }, [selectedIso3])
 
   const minFrac = SHEET_MIN
   const stops = SHEET_STOPS_DEFAULT
@@ -1163,6 +1333,18 @@ function BottomSheet({
   const isVisitedSelected = selectedCountry && visited.has(selectedCountry.iso3)
   const isWishlistedSelected = selectedCountry && wishlist.has(selectedCountry.iso3)
 
+  // Basic-info card data (Change 6) — bundled facts joined by ISO-3. null when
+  // we have no facts row; the card then shows only region (always present).
+  const selectedInfo = selectedCountry ? lookupCountryInfo(selectedCountry.iso3) : null
+  const infoRows = selectedInfo
+    ? [
+        { key: 'capital', label: 'Capital', value: selectedInfo.capital || '—' },
+        { key: 'population', label: 'Population', value: formatPopulation(selectedInfo.population) },
+        { key: 'area', label: 'Surface area', value: formatArea(selectedInfo.area) },
+        { key: 'languages', label: 'Languages', value: formatLanguages(selectedInfo.languages) },
+      ]
+    : []
+
   return (
     <div
       className={'cb-sheet' + (dragging ? ' cb-sheet--dragging' : '')}
@@ -1225,6 +1407,27 @@ function BottomSheet({
               </button>
             </div>
 
+            {/* Basic-info card (Change 6): capital / population / surface area
+                / main languages, joined from the bundled facts by ISO-3.
+                Replaces the old thin region-only preview. Region + flag live in
+                the head above; this card carries the four richer facts. A row
+                whose value is unknown renders an em dash, never a wrong "0". */}
+            {infoRows.length > 0 ? (
+              <dl className="cb-info">
+                {infoRows.map((row) => (
+                  <div className="cb-info-row" key={row.key}>
+                    <dt>{row.label}</dt>
+                    <dd>{row.value}</dd>
+                  </div>
+                ))}
+              </dl>
+            ) : null}
+
+            {/* Two independent status toggles, side by side (Change 5): 'Been'
+                (visited) and 'Want to go' (wishlist). Marking one clears the
+                other — a country you've been to isn't also somewhere you still
+                want to go — and each persists the same way (whole-list PUT of
+                visited.json / wishlist.json). */}
             <div className="cb-detail-actions">
               <button
                 type="button"
@@ -1232,7 +1435,7 @@ function BottomSheet({
                 onClick={() => onToggleVisited(selectedCountry)}
                 aria-pressed={isVisitedSelected}
               >
-                {isVisitedSelected ? 'Visited' : 'Mark visited'}
+                {isVisitedSelected ? 'Been ✓' : 'Been'}
               </button>
               <button
                 type="button"
@@ -1240,7 +1443,7 @@ function BottomSheet({
                 onClick={() => onToggleWishlist(selectedCountry)}
                 aria-pressed={isWishlistedSelected}
               >
-                {isWishlistedSelected ? 'Wishlisted' : 'Want to visit'}
+                {isWishlistedSelected ? 'Want to go ★' : 'Want to go'}
               </button>
             </div>
           </>
@@ -1336,9 +1539,9 @@ function BottomSheet({
               {query
                 ? 'No countries match.'
                 : statusFilter === 'visited'
-                  ? 'No visited countries yet — tap the ring on a row to add one.'
+                  ? 'No countries marked “Been” yet — tap the ring on a row to add one.'
                   : statusFilter === 'wishlist'
-                    ? 'Nothing on the wishlist yet — open a country and tap “Want to visit”.'
+                    ? 'Nothing on your “Want to go” list yet — tap the star on a row to add one.'
                     : 'No countries match.'}
             </div>
           ) : (
@@ -1374,21 +1577,43 @@ function BottomSheet({
                       {country.subregion ? ` · ${country.subregion}` : ''}
                     </small>
                   </span>
-                  <button
-                    type="button"
-                    className={'cb-row-mark' + (isVisited ? ' cb-row-mark--on' : '')}
-                    aria-label={isVisited
-                      ? `Mark ${country.displayName} not visited`
-                      : `Mark ${country.displayName} visited`}
-                    aria-pressed={isVisited}
-                    title={isVisited ? 'Visited — tap to unmark' : 'Tap to mark visited'}
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      onToggleVisited(country)
-                    }}
-                  >
-                    <span aria-hidden="true">{isVisited ? '✓' : ''}</span>
-                  </button>
+                  {/* Two one-tap status toggles per row (Change 5): the green
+                      ring = 'Been', the star = 'Want to go'. Both stop
+                      propagation so they mark without opening the detail.
+                      Surfacing the wishlist on the row (not just inside the
+                      detail) is what makes "want to go" discoverable. */}
+                  <span className="cb-row-marks">
+                    <button
+                      type="button"
+                      className={'cb-row-want' + (isWishlisted ? ' cb-row-want--on' : '')}
+                      aria-label={isWishlisted
+                        ? `Remove ${country.displayName} from want to go`
+                        : `Add ${country.displayName} to want to go`}
+                      aria-pressed={isWishlisted}
+                      title={isWishlisted ? 'Want to go — tap to remove' : 'Tap to add to want to go'}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onToggleWishlist(country)
+                      }}
+                    >
+                      <span aria-hidden="true">{isWishlisted ? '★' : '☆'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={'cb-row-mark' + (isVisited ? ' cb-row-mark--on' : '')}
+                      aria-label={isVisited
+                        ? `Mark ${country.displayName} not been`
+                        : `Mark ${country.displayName} been`}
+                      aria-pressed={isVisited}
+                      title={isVisited ? 'Been — tap to unmark' : 'Tap to mark been'}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onToggleVisited(country)
+                      }}
+                    >
+                      <span aria-hidden="true">{isVisited ? '✓' : ''}</span>
+                    </button>
+                  </span>
                 </div>
               )
             })
@@ -1569,6 +1794,17 @@ const CSS = `
   min-width: 0;
   line-height: 1.15;
 }
+/* Rotating hero saying — flavor text, not a headline shout. Slightly softer
+   weight/size than a title and truncated to one line so a longer phrase can't
+   wrap into the meta chips. */
+.cb-saying {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 /* Brand mark: the app's real glossy icon, no name text. The changing
    sentence ("12 stamps on the map.") sits beside it as status, not
    identity. */
@@ -1651,13 +1887,21 @@ const CSS = `
      confidently-stated "0 / …" as fact. */
   opacity: 0.55;
 }
-.cb-counter strong {
-  font-size: 18px;
+/* Balanced counter (Change 3): the visited count and the total now read at
+   the SAME size and weight — the old design set 54 at 18px accent and /195 at
+   13px muted, which made the pair look lopsided. Only color separates them
+   (the current count picks up the accent; the divider + total sit in muted),
+   so "54 / 195" reads as one tidy, even fraction. */
+.cb-counter-now {
+  font-size: 14px;
+  font-weight: 600;
   color: var(--accent);
 }
-.cb-counter span {
+.cb-counter-sep,
+.cb-counter-total {
+  font-size: 14px;
+  font-weight: 600;
   color: var(--muted);
-  font-size: 13px;
 }
 /* Sync pill — sits next to the counter; hidden when synced + online
    (the common case). When pending > 0 or offline, the pill softly
@@ -1999,6 +2243,44 @@ const CSS = `
   color: var(--muted);
   letter-spacing: 0.02em;
 }
+/* Basic-info card (Change 6) — a definition list of capital / population /
+   surface area / languages. Label muted, value in --text; rows separated by a
+   hairline so the four facts read as a tidy table without heavy borders. */
+.cb-info {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--cb-border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 50%, transparent);
+  overflow: hidden;
+}
+.cb-info-row {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 14px;
+  padding: 10px 14px;
+}
+.cb-info-row + .cb-info-row {
+  border-top: 1px solid color-mix(in srgb, var(--cb-border) 60%, transparent);
+}
+.cb-info-row dt {
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+.cb-info-row dd {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+  text-align: right;
+  /* Numeric facts (population/area) align as derived stats, matching the
+     counter chip's tabular treatment. */
+  font-variant-numeric: tabular-nums;
+  word-break: break-word;
+}
 .cb-detail-close {
   min-width: 44px;
   min-height: 44px;
@@ -2096,6 +2378,40 @@ const CSS = `
   margin-top: 2px;
   font-size: 12px;
   color: var(--muted);
+}
+/* Two one-tap toggles per row, side by side (Change 5): the star =
+   'Want to go', the ring = 'Been'. The group is the row's third grid column. */
+.cb-row-marks {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+/* 'Want to go' star toggle — wishlist orange when on, hollow when off.
+   Same 40px hit target as the visited ring so the two read as a pair. */
+.cb-row-want {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  margin: -8px -2px -8px 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  font-size: 20px;
+  line-height: 1;
+  color: color-mix(in srgb, var(--muted) 80%, transparent);
+  transition: color 0.12s, transform 0.08s;
+}
+.cb-row-want--on {
+  color: var(--cb-wishlist);
+}
+.cb-row-want:active { transform: scale(0.88); }
+@media (hover: hover) {
+  .cb-row-want:hover { color: var(--cb-wishlist); }
 }
 /* One-tap visited toggle on each list row: mark a country without opening
    its detail (tap stops propagation). 40px hit target around a 26px ring;
@@ -2212,6 +2528,23 @@ export default function Atlas({ appId, token }) {
   // Did we manage to render anything for the user? Drives the offline banner
   // copy — "showing your last visited list" only when we actually have one.
   const [hasCachedVisited, setHasCachedVisited] = useState(false)
+
+  // Rotating hero saying (Change 4) — replaces the old big visited count, which
+  // just duplicated the ~visited stamps already visible on the map. A random
+  // line is picked on mount and re-rolled every interval, never repeating the
+  // one it replaces (see pickRotatingSaying). An empty ROTATING_SAYINGS array
+  // yields index -1 and the header renders no line at all.
+  const [sayingIndex, setSayingIndex] = useState(() =>
+    pickRotatingSaying(ROTATING_SAYINGS, -1),
+  )
+  useEffect(() => {
+    if (ROTATING_SAYINGS.length <= 1) return undefined
+    const id = setInterval(() => {
+      setSayingIndex((current) => pickRotatingSaying(ROTATING_SAYINGS, current))
+    }, ROTATING_SAYING_INTERVAL_MS)
+    return () => clearInterval(id)
+  }, [])
+  const heroSaying = sayingIndex >= 0 ? ROTATING_SAYINGS[sayingIndex] : ''
 
   // ----- boot ----------------------------------------------------------
   // boot() lives outside the effect so we can re-run it from the online
@@ -2665,25 +2998,25 @@ export default function Atlas({ appId, token }) {
             }}
           />
           <span className="cb-brand-fallback" style={{ display: 'none' }} aria-hidden="true">·</span>
-          <h1>
-            {visitedCount === 0
-              ? 'Tap a country.'
-              : visitedCount === 1
-              ? 'First stamp.'
-              : `${visitedCount} stamps on the map.`}
-          </h1>
+          {/* Rotating hero saying (Change 4). The old "N stamps on the map."
+              count duplicated the visited stamps already on the globe AND the
+              counter chip on the right; a rotating short line replaces it. When
+              ROTATING_SAYINGS is emptied heroSaying is '' and the <h1> is
+              omitted entirely — clearing the list cleanly removes the line. */}
+          {heroSaying ? <h1 className="cb-saying">{heroSaying}</h1> : null}
         </div>
         <div className="cb-header-meta">
           <SyncPill online={online} hasRuntime={storage.hasRuntime()} />
-          {/* Just the count over the total — the percentage chip was
-              dropped as a redundant derived stat (the headline already
-              narrates progress, and small screens hid it anyway). */}
+          {/* The single source of progress now: a balanced "visited / total"
+              chip (both numbers the same weight — see .cb-counter). The hero
+              line is flavor; this is the number. */}
           <div
             className={'cb-counter' + (offlineBoot ? ' cb-counter--faded' : '')}
             aria-label={`${visitedCount} of ${totalCount} countries visited`}
           >
-            <strong>{visitedCount}</strong>
-            <span>/ {totalCount || '…'}</span>
+            <span className="cb-counter-now">{visitedCount}</span>
+            <span className="cb-counter-sep" aria-hidden="true">/</span>
+            <span className="cb-counter-total">{totalCount || '…'}</span>
           </div>
         </div>
       </header>

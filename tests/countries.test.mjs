@@ -24,13 +24,74 @@ const {
   LEGACY_CACHE_KEY,
   ROTATION_SINGULARITY_LAT,
   STATUS_FILTERS,
+  angularStepDeg,
   cacheRead,
   cacheWrite,
+  easePointerToDisc,
   filterCountriesByStatus,
+  formatArea,
+  formatLanguages,
+  formatPopulation,
+  lookupCountryInfo,
   nextDragRotation,
   orderCountriesForList,
+  pickRotatingSaying,
+  solveVersorDrag,
   toggleCountryStatus,
 } = await import('./.build/index.mjs')
+
+// A self-contained orthographic projection matching d3-geo's geoOrthographic
+// (translate=[cx,cy], scale=radius, rotate=[λ,φ,γ]°, clipAngle=90): only the
+// `.invert` is needed by solveVersorDrag. Implemented inline so the drag maths
+// can be tested with no DOM and no d3-geo install (the app loads d3-geo from
+// esm.sh at runtime; it isn't a local dep). Forward orthographic places the
+// post-rotation point [λ,φ] at x = radius·cosφ·sinλ, y = -radius·sinφ; the
+// rotate is the same three-axis spherical rotation d3 applies. invert reverses
+// pixel → ortho sphere point → un-rotate, returning null off the disc.
+const D2R = Math.PI / 180
+const R2D = 180 / Math.PI
+const makeOrtho = (cx, cy, radius) => (rot) => {
+  const [dl, dp, dg] = [(rot[0] || 0) * D2R, (rot[1] || 0) * D2R, (rot[2] || 0) * D2R]
+  const cg = Math.cos(dg)
+  const sg = Math.sin(dg)
+  const cp = Math.cos(dp)
+  const sp = Math.sin(dp)
+  return {
+    invert([px, py]) {
+      const x = (px - cx) / radius
+      const y = -(py - cy) / radius
+      const rho2 = x * x + y * y
+      if (rho2 > 1) return null // off the sphere disc (the limb is rho2 = 1)
+      const z = Math.sqrt(1 - rho2)
+      // Inverse orthographic in the rotated frame: lambda/phi of the surface
+      // point under the pixel, with d3's default clip-plane orientation.
+      let lambda = Math.atan2(x, z)
+      let phi = Math.asin(Math.max(-1, Math.min(1, y)))
+      // Undo gamma (roll) about the screen normal first.
+      const l1 = lambda * 1
+      const p1 = phi * 1
+      const cl = Math.cos(l1)
+      let sl = Math.sin(l1)
+      let xx = cl * Math.cos(p1)
+      let yy = sl * Math.cos(p1)
+      let zz = Math.sin(p1)
+      // gamma about x-axis, then phi about y-axis, then lambda about z-axis
+      // (the inverse of d3's forward rotate composition).
+      let ty = yy * cg + zz * sg
+      let tz = -yy * sg + zz * cg
+      yy = ty
+      zz = tz
+      let tx = xx * cp + zz * sp
+      tz = -xx * sp + zz * cp
+      xx = tx
+      zz = tz
+      const out = [Math.atan2(yy, xx) * R2D + rot[0], Math.asin(Math.max(-1, Math.min(1, zz))) * R2D]
+      void sl
+      void sp
+      return out
+    },
+  }
+}
 
 const countries = [
   { iso3: 'USA', iso2: 'US', displayName: 'United States', region: 'Americas' },
@@ -153,6 +214,173 @@ test('nextDragRotation is exact 1:1 away from the poles and eases into them', ()
 
   // No dead zone at the top — dragging back out is always possible.
   assert.deepEqual(nextDragRotation([12, 84, 0], 18, 60), [18, 60, 0])
+})
+
+test('easePointerToDisc leaves the inner disc untouched and eases an off-disc pointer below the singular limb', () => {
+  const cx = 200
+  const cy = 200
+  const radius = 100
+  // Inner disc (rho ≤ 0.88) → exact no-op: centre-of-disc dragging is 1:1.
+  assert.deepEqual(easePointerToDisc(230, 215, cx, cy, radius), [230, 215])
+  assert.deepEqual(easePointerToDisc(cx + 50, cy, cx, cy, radius), [cx + 50, cy])
+  // A point just at the ease threshold is still essentially untouched.
+  const atStart = easePointerToDisc(cx + 88, cy, cx, cy, radius)
+  assert.ok(Math.abs(atStart[0] - (cx + 88)) < 1e-9, 'ρ=0.88 is the ease threshold (≈ identity)')
+  // Far outside the disc → eased to a radius strictly INSIDE the limb, never on
+  // or past it (so projection.invert stays well-conditioned, gain bounded).
+  const [px, py] = easePointerToDisc(cx + 400, cy, cx, cy, radius)
+  const dist = Math.hypot(px - cx, py - cy)
+  assert.ok(dist < radius, 'eased pointer sits strictly inside the sphere disc (not on the limb)')
+  assert.ok(dist <= radius * 0.985 + 1e-9, 'eased radius respects the sub-limb ceiling (0.985·R)')
+  assert.ok(dist > radius * 0.9, 'eased pointer is out near the edge, not collapsed to the centre')
+})
+
+test('easePointerToDisc is CONTINUOUS near and past the limb — a small cursor delta is a small radius delta, never a wall or a jump', () => {
+  const cx = 0
+  const cy = 0
+  const radius = 100
+  const easedR = (r) => {
+    const [x] = easePointerToDisc(r, 0, cx, cy, radius)
+    return x // on the +x axis the eased radius is just the x coordinate
+  }
+  // Walk the cursor radially from inside the disc out to well beyond the limb.
+  // The OLD hard clamp froze every point past 0.999·R onto one circle (slope 0
+  // → a dead-zone the user feels as 'abrupt then stuck'). The soft ease must
+  // stay strictly monotone with a small, BOUNDED step for each small move,
+  // through the limb (r=R) and out past it — that continuity IS the fix.
+  const CURSOR_STEP = 2
+  let prev = -Infinity
+  let maxStep = 0
+  let deepStep = 0 // largest step well past the limb (r ≥ 1.5·R)
+  for (let r = 80; r <= 300; r += CURSOR_STEP) {
+    const cur = easedR(r)
+    if (r > 80) {
+      assert.ok(cur >= prev - 1e-9, `eased radius is monotone at r=${r} (no reversal)`)
+      const step = cur - prev
+      assert.ok(step >= -1e-9, 'no backward jump')
+      // Slope ≤ 1 everywhere: the eased radius never moves FASTER than the
+      // cursor (no amplification/spike). In the inner disc the slope is exactly
+      // 1 (identity, the smooth 1:1 region); past the ease threshold it only
+      // ever compresses. A hard clamp would instead show a +R jump at the wall.
+      assert.ok(step <= CURSOR_STEP + 1e-9, `eased step ${step.toFixed(4)}px at r=${r} never exceeds the ${CURSOR_STEP}px cursor step (no spike)`)
+      // And the step must SHRINK monotonically once we're easing (continuous,
+      // decaying derivative — the smooth feel), never grow back into a jump.
+      maxStep = Math.max(maxStep, step)
+      if (r - CURSOR_STEP >= 1.5 * radius) deepStep = Math.max(deepStep, step)
+    }
+    prev = cur
+  }
+  // No step ever amplifies the cursor (slope ≤ 1 globally — the inner-disc 1:1
+  // region is the steepest part; everything past it only compresses).
+  assert.ok(maxStep <= CURSOR_STEP + 1e-9, `largest eased-radius step ${maxStep.toFixed(3)}px never amplifies the cursor`)
+  // Deep off-disc (cursor dragged way past the silhouette) the mapping has all
+  // but flattened — each 2px barely nudges the radius. The old hard clamp froze
+  // it to exactly 0 with a discontinuous wall before it; the ease decays toward
+  // 0 smoothly instead (asymptote, not a cliff).
+  assert.ok(deepStep < 0.05, `deep off-disc steps ${deepStep.toFixed(4)}px have flattened smoothly (no wall, no freeze-jump)`)
+
+  // And specifically ACROSS the silhouette (cursor crossing r=R): the eased
+  // radius barely moves — no discontinuity at the limb where the old clamp's
+  // dead-zone began.
+  const justInside = easedR(radius - 1)
+  const justOutside = easedR(radius + 1)
+  assert.ok(Math.abs(justOutside - justInside) < 1.0, 'crossing the silhouette is smooth, not a step')
+  assert.ok(justOutside >= justInside - 1e-9, 'still monotone across the limb')
+})
+
+test('solveVersorDrag near the edge produces a BOUNDED rotation — no runaway limb snap', () => {
+  const cx = 200
+  const cy = 200
+  const radius = 100
+  const startRotate = [0, 0, 0]
+  const makeProjection = makeOrtho(cx, cy, radius)
+  // Grab a point well inside the disc.
+  const grab = makeProjection(startRotate).invert([cx + 20, cy])
+  const versorCartesian = (e) => {
+    const l = (e[0] * Math.PI) / 180
+    const p = (e[1] * Math.PI) / 180
+    const cp = Math.cos(p)
+    return [cp * Math.cos(l), cp * Math.sin(l), Math.sin(p)]
+  }
+  const v0 = versorCartesian(grab)
+  // versor.fromAngles for the identity start rotation is the unit quaternion.
+  const q0 = [1, 0, 0, 0]
+
+  // Drag the pointer FAR past the silhouette (200px outside a 100px-radius
+  // disc). Without the pixel clamp this inverts to a divergent near-limb point
+  // and the old code snapped the globe across the sphere; with the clamp the
+  // per-frame rotation must stay bounded.
+  const next = solveVersorDrag({
+    makeProjection,
+    startRotate,
+    v0,
+    q0,
+    current: startRotate,
+    px: cx + 300,
+    py: cy,
+    cx,
+    cy,
+    radius,
+  })
+  assert.ok(next, 'a near/over-edge drag still resolves a rotation (gesture stays alive)')
+  // The step from the start rotation to the solved one is a sane drag amount,
+  // not a quarter-turn-plus runaway. A single edge frame can never exceed the
+  // half-sphere the versor delta spans; assert it stays well under that.
+  const step = angularStepDeg(startRotate, next)
+  assert.ok(step <= 95, `near-edge drag step ${step.toFixed(1)}° is bounded, not a runaway snap`)
+  // North-up invariant preserved: roll stays zero.
+  assert.equal(next[2], 0)
+
+  // Sweeping the off-disc pointer a little further moves the globe a little
+  // further (monotone, smooth) — not a discontinuous jump.
+  const next2 = solveVersorDrag({
+    makeProjection,
+    startRotate,
+    v0,
+    q0,
+    current: next,
+    px: cx + 320,
+    py: cy + 10,
+    cx,
+    cy,
+    radius,
+  })
+  assert.ok(next2, 'a further off-disc move still resolves')
+  assert.ok(angularStepDeg(next, next2) < 30, 'consecutive off-disc frames step smoothly, no jump')
+})
+
+test('pickRotatingSaying: empty list → -1 (renders nothing), single → 0, else no back-to-back repeat', () => {
+  // Empty list yields -1 so the header renders no saying at all.
+  assert.equal(pickRotatingSaying([], 0), -1)
+  assert.equal(pickRotatingSaying(undefined, 0), -1)
+  // Single entry stays put (no other choice).
+  assert.equal(pickRotatingSaying(['only'], 0), 0)
+  // Never repeats the one currently on screen, even if random lands on it.
+  const sayings = ['a', 'b', 'c']
+  assert.equal(pickRotatingSaying(sayings, 1, () => 1 / 3), 2) // random→idx1, ==current→step to 2
+  assert.notEqual(pickRotatingSaying(sayings, 2, () => 2 / 3), 2)
+})
+
+test('lookupCountryInfo + formatters: bundled facts join by ISO-3, missing data reads as em dash', () => {
+  const facts = {
+    USA: { cap: 'Washington D.C.', pop: 326687501, area: 9372610, lang: ['English'] },
+    CHE: { cap: 'Bern', pop: 8513227, area: 41284, lang: ['French', 'Swiss German', 'Italian', 'Romansh'] },
+  }
+  const usa = lookupCountryInfo('USA', facts)
+  assert.equal(usa.capital, 'Washington D.C.')
+  assert.equal(usa.population, 326687501)
+  assert.deepEqual(usa.languages, ['English'])
+  // No facts row → null (the card then shows only region/flag).
+  assert.equal(lookupCountryInfo('ZZZ', facts), null)
+  assert.equal(lookupCountryInfo('', facts), null)
+
+  assert.equal(formatPopulation(326687501), '326,687,501')
+  assert.equal(formatPopulation(null), '—')
+  assert.equal(formatArea(9372610), '9,372,610 km²')
+  assert.equal(formatArea(undefined), '—')
+  // Switzerland's four languages cap at three with a +1 overflow marker.
+  assert.equal(formatLanguages(facts.CHE.lang), 'French, Swiss German, Italian +1')
+  assert.equal(formatLanguages([]), '—')
 })
 
 test('cacheRead migrates the old Visited localStorage prefix to Atlas', () => {

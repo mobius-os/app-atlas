@@ -3,6 +3,11 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build:facts": "node scripts/build-country-facts.mjs",
     "test": "NODE_PATH=/home/hmzmrzx/projects/mobius/frontend/node_modules node --test tests/"
+  },
+  "devDependencies": {
+    "country-json": "^2.3.0",
+    "world-countries": "^5.1.0"
   }
 }
