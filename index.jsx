@@ -107,27 +107,32 @@ function makeStorage({ appId, token }) {
 const soften = (value) => String(value || '').toLowerCase().trim()
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value))
 
-// Hero sayings — the short line beside the brand mark. One is picked at random
-// on mount and re-rolls every ROTATING_SAYING_INTERVAL_MS, never repeating the
-// line it's replacing (see pickRotatingSaying). This is the ONLY editable copy
-// surface: keep the phrases short and tasteful. EMPTY THE ARRAY to render no
-// line at all — the header simply omits it, so clearing this list cleanly
-// removes the hero copy with no other change.
+// Hero sayings — the short line beside the brand mark. ONE is picked at random
+// on mount and stays fixed for the whole session: it does NOT cycle while the
+// app is open (a line that re-rolled under the user's eyes read as a glitch).
+// Re-open the app for a fresh pick. This is the ONLY editable copy surface.
+//
+// CONSTRAINT — every line must fit the header on one line at a phone width with
+// NO ellipsis. The saying shares the top bar with the brand icon and the
+// visited counter, so its box is narrow (~190px at 360px wide, narrower as the
+// counter widens). These six were measured to fit at 360–412px against the
+// widest counter; keep new lines ≤ ~24 characters (scrollWidth ≤ ~178px) or
+// they truncate. EMPTY THE ARRAY to render no line at all — the header simply
+// omits it, so clearing this list cleanly removes the hero copy.
 const ROTATING_SAYINGS = [
   'The world is your oyster.',
-  'Not all who wander are lost.',
-  'Go see for yourself.',
-  'The map is not the territory.',
   'Adventure is out there.',
-  'Wherever you go, go with all your heart.',
+  'Go see for yourself.',
+  'The world is yours.',
+  'Collect places.',
+  'Wander often.',
 ]
-// How long each saying shows before the next random pick.
-const ROTATING_SAYING_INTERVAL_MS = 9000
 
-// Pick the next saying index at random WITHOUT repeating the one on screen.
+// Pick the saying index at random WITHOUT repeating the one on screen.
 // Returns -1 when the list is empty (the caller renders nothing) and stays put
 // when the list has a single entry (no other choice). `random` is injected so
-// the rotation is unit-testable; it defaults to Math.random in the app.
+// the pick is unit-testable; it defaults to Math.random in the app. The app
+// calls this ONCE on mount (no interval) so the line is fixed per app-open.
 export function pickRotatingSaying(sayings, currentIndex, random = Math.random) {
   if (!Array.isArray(sayings) || sayings.length === 0) return -1
   if (sayings.length === 1) return 0
@@ -1143,13 +1148,15 @@ function Globe({
 // --------------------------------------------------------------------------
 // Bottom sheet — vertically draggable list + search.
 // --------------------------------------------------------------------------
-// The sheet opens COLLAPSED so the globe is the hero. SHEET_MIN ≈ 22% of the
-// viewport shows ~3 country rows on a phone (rows are ~62px; 22% of an ~800px
-// viewport ≈ 175px ≈ three rows + the search bar) and hands the rest of the
-// screen to the globe. The list still scrolls within that band, and the user
-// can drag the handle up to SHEET_MID / SHEET_MAX to browse the full list — the
-// collapsed default just stops the list from eating half the screen on open.
-const SHEET_MIN = 0.22  // ~22% of viewport — collapsed, ~3 rows; the open default
+// The sheet opens COLLAPSED so the globe is the hero. SHEET_MIN ≈ 34% of the
+// viewport so the list shows ~3 full country rows at rest (rows are ~62px;
+// after the 26px handle + the ~58px search/filter row, 34% of an ~890px
+// viewport leaves ~205px of list ≈ three rows). The earlier 22% only cleared
+// one row — the owner wanted ~3 visible without dragging. The list still
+// scrolls within the band, and the handle drags up to SHEET_MID / SHEET_MAX
+// for the full list; this collapsed default just stops the list from eating
+// the globe while still showing enough rows to feel like a list.
+const SHEET_MIN = 0.34  // ~34% of viewport — collapsed, ~3 rows; the open default
 const SHEET_MID = 0.50  // 50% — neutral, dragged-to
 const SHEET_MAX = 0.80  // 80% — expanded, dragged-to
 const SHEET_STOPS_DEFAULT = [SHEET_MIN, SHEET_MID, SHEET_MAX]
@@ -1244,15 +1251,12 @@ function BottomSheet({
   const [dragging, setDragging] = useState(false)
   const scrollRef = useRef(null)
 
-  // When a country opens, lift the sheet so the detail (info card + toggles) is
-  // visible. The collapsed default (SHEET_MIN) is great for browsing the globe
-  // but too short to show the detail — raise the sheet to at least the neutral
-  // stop, without ever shrinking a sheet the user has already dragged higher.
-  const selectedIso3 = selectedCountry?.iso3 || ''
-  useEffect(() => {
-    if (!selectedIso3) return
-    setFrac((current) => (current < SHEET_MID ? SHEET_MID : current))
-  }, [selectedIso3])
+  // Opening a country must NOT resize the sheet (owner feedback: the panel
+  // jumped when you tapped a country). There is deliberately no auto-lift on
+  // selection — the sheet stays at whatever height it's at, and the detail
+  // view fits within that band, scrolling internally when its content is
+  // taller (see .cb-detail overflow-y:auto). The user can still drag the
+  // handle up for more room; tapping a country just never moves it for them.
 
   const minFrac = SHEET_MIN
   const stops = SHEET_STOPS_DEFAULT
@@ -2068,20 +2072,23 @@ const CSS = `
   transition: none;
 }
 .cb-sheet-handle {
-  /* 44px tap target — the grip itself stays visually small but
-     the surrounding hit area is finger-friendly. */
+  /* Subtle grab affordance, not a band. The visible row is short (26px)
+     to give the list back ~18px of vertical space (owner: the handle ate
+     too much). The hit area stays finger-friendly because the handle's
+     own padding plus the rounded sheet lip above it read as one target;
+     the grip is centred in the 26px row. */
   flex-shrink: 0;
-  height: 44px;
+  height: 26px;
   display: grid;
   place-items: center;
   touch-action: none;
   cursor: ns-resize;
 }
 .cb-sheet-grip {
-  width: 44px;
-  height: 5px;
+  width: 34px;
+  height: 4px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--text) 24%, transparent);
+  background: color-mix(in srgb, var(--text) 20%, transparent);
 }
 .cb-sheet-search {
   flex: 1 1 auto;
@@ -2537,21 +2544,14 @@ export default function Atlas({ appId, token }) {
   // copy — "showing your last visited list" only when we actually have one.
   const [hasCachedVisited, setHasCachedVisited] = useState(false)
 
-  // Rotating hero saying (Change 4) — replaces the old big visited count, which
-  // just duplicated the ~visited stamps already visible on the map. A random
-  // line is picked on mount and re-rolled every interval, never repeating the
-  // one it replaces (see pickRotatingSaying). An empty ROTATING_SAYINGS array
-  // yields index -1 and the header renders no line at all.
-  const [sayingIndex, setSayingIndex] = useState(() =>
-    pickRotatingSaying(ROTATING_SAYINGS, -1),
-  )
-  useEffect(() => {
-    if (ROTATING_SAYINGS.length <= 1) return undefined
-    const id = setInterval(() => {
-      setSayingIndex((current) => pickRotatingSaying(ROTATING_SAYINGS, current))
-    }, ROTATING_SAYING_INTERVAL_MS)
-    return () => clearInterval(id)
-  }, [])
+  // Hero saying (Change 4) — replaces the old big visited count, which just
+  // duplicated the visited stamps already on the map. ONE line is picked at
+  // random on mount and stays fixed for the session: no interval, so it never
+  // re-rolls under the user's eyes (a changing line read as a glitch — owner
+  // feedback). useState's initializer runs once per mount, which IS the
+  // pick-once; a fresh pick only happens when the app is re-opened. An empty
+  // ROTATING_SAYINGS array yields index -1 and the header renders no line.
+  const [sayingIndex] = useState(() => pickRotatingSaying(ROTATING_SAYINGS, -1))
   const heroSaying = sayingIndex >= 0 ? ROTATING_SAYINGS[sayingIndex] : ''
 
   // ----- boot ----------------------------------------------------------
