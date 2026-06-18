@@ -239,6 +239,19 @@ const MAX_ZOOM = 6
 // "a few taps" rather than a slow crawl.
 const ZOOM_STEP = 1.4
 
+// Release inertia — when the finger lifts, the globe keeps spinning with the
+// velocity it had and decays by INERTIA_FRICTION each frame (≈0.92 → loses
+// ~8%/frame, a natural ~0.4s glide at 60fps). Below INERTIA_MIN_SPEED°/frame
+// the motion is imperceptible, so the loop stops. INERTIA_MAX_SPEED caps a
+// flick so a fast swipe can't launch the globe into a blur.
+const INERTIA_FRICTION = 0.92
+const INERTIA_MIN_SPEED = 0.015 // °/frame — below this the glide has visually stopped
+const INERTIA_MAX_SPEED = 8 // °/frame — clamp a hard flick to a readable spin
+// How many recent move deltas average into the release velocity. Averaging the
+// last few (not just the final delta) smooths out a jittery last sample so the
+// glide direction matches the swipe the user actually made.
+const VELOCITY_SAMPLES = 4
+
 // Total angular distance between two [lng, lat]° points on the sphere, in
 // degrees (the great-circle angle). Used by tests to assert a near-edge drag
 // produces a bounded rotation (no runaway limb snap).
@@ -602,6 +615,20 @@ function Globe({
   // that knows "how many fingers are down".
   const pointersRef = useRef(new Map())
   const zoomRef = useRef(1)
+  // rAF coalescing — a fast drag fires pointermove at 60–120Hz, but each
+  // setRotation rebuilds the d3 projection + geoPath and repaints all ~195
+  // country paths. Coalesce: gesture handlers stash the latest solved rotation
+  // in pendingRotationRef and ask for ONE frame (rafRef guards re-scheduling);
+  // the frame flushes ref → state, so we re-render at most once per display
+  // refresh no matter how many moves arrived between frames.
+  const rafRef = useRef(0)
+  const pendingRotationRef = useRef(null)
+  // Release inertia — the last few move deltas give an angular velocity
+  // [dLng, dLat] per frame; on release a decay loop (vel *= FRICTION) keeps
+  // feeding rotation so the globe glides to rest instead of stopping dead.
+  // inertiaRef holds that loop's frame id so pointerdown / unmount can cancel it.
+  const velocityRef = useRef({ vLng: 0, vLat: 0, samples: [] })
+  const inertiaRef = useRef(0)
   const [size, setSize] = useState({ width: 0, height: 0 })
   const [rotation, setRotation] = useState(INITIAL_ROTATION.slice())
   // zoom is a multiplier on the base radius; see MIN_ZOOM/MAX_ZOOM. Held in
@@ -609,6 +636,19 @@ function Globe({
   // the re-render) the same way rotation is — setZoomBoth keeps them in sync.
   const [zoom, setZoom] = useState(1)
   const [ready, setReady] = useState(false)
+  // True while a drag or release-glide is in flight. Flips at most twice per
+  // gesture (grab → true, rest → false) — NOT per frame — so it costs no extra
+  // renders, and lets the projection drop precision while the globe moves: a
+  // coarser geoPath tessellation is cheaper to build + paint on every frame,
+  // and the detail it skips is invisible on a spinning sphere. The crisp path
+  // snaps back the instant motion settles.
+  const [spinning, setSpinning] = useState(false)
+  const spinningRef = useRef(false)
+  const setSpinningBoth = useCallback((on) => {
+    if (spinningRef.current === on) return
+    spinningRef.current = on
+    setSpinning(on)
+  }, [])
   // depFailed used to be sticky for the rest of the session — a single
   // hiccupping import (e.g. SW updating mid-flight) blanked the globe
   // until full reload. Now it's paired with a counter that retries on
@@ -680,10 +720,99 @@ function Globe({
     return () => observer.disconnect()
   }, [])
 
-  const setRotationBoth = useCallback((next) => {
-    rotationRef.current = next
-    setRotation(next)
+  // Cancel a pending coalesced frame — called on pointerdown (so a fresh grab
+  // doesn't flush a stale frame) and on unmount.
+  const cancelRotationFrame = useCallback(() => {
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current)
+      rafRef.current = 0
+    }
+    pendingRotationRef.current = null
   }, [])
+
+  // Cancel the release-inertia decay loop — called on the next pointerdown so a
+  // new grab takes over cleanly, and on unmount.
+  const cancelInertia = useCallback(() => {
+    if (inertiaRef.current) {
+      cancelAnimationFrame(inertiaRef.current)
+      inertiaRef.current = 0
+    }
+  }, [])
+
+  // Coalesced rotation setter — gesture handlers call this on EVERY pointer
+  // move; it only schedules one rAF per frame. rotationRef stays live (so the
+  // versor solver always reads the freshest baseline), but setRotation — the
+  // expensive re-render — fires once per frame from the flush below.
+  const scheduleRotation = useCallback((next) => {
+    rotationRef.current = next // keep the gesture baseline exact between frames
+    pendingRotationRef.current = next
+    if (rafRef.current) return // a frame is already queued; it'll pick up the latest
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = 0
+      const pending = pendingRotationRef.current
+      pendingRotationRef.current = null
+      if (pending) setRotation(pending)
+    })
+  }, [])
+
+  // Record one move's angular delta so finishDrag can read the release velocity.
+  // We keep the last VELOCITY_SAMPLES so a jittery final frame doesn't define
+  // the whole glide; the average is the flick the user actually made.
+  const recordVelocity = useCallback((prev, next) => {
+    const dLng = shortestLngDelta(prev[0] ?? 0, next[0] ?? 0)
+    const dLat = (next[1] ?? 0) - (prev[1] ?? 0)
+    const v = velocityRef.current
+    v.samples.push([dLng, dLat])
+    if (v.samples.length > VELOCITY_SAMPLES) v.samples.shift()
+  }, [])
+
+  // Run the release glide. Reads the averaged sample velocity, clamps it, then
+  // feeds rotation each frame with vel *= friction until it drops below the
+  // perceptible-motion threshold. Cancelled by the next pointerdown / unmount.
+  // Owns the "spinning" flag for the glide's lifetime: any exit without a live
+  // loop clears it so the projection snaps back to crisp the moment it rests.
+  const startInertia = useCallback(() => {
+    cancelInertia()
+    const samples = velocityRef.current.samples
+    let vLng = samples.length ? samples.reduce((s, d) => s + d[0], 0) / samples.length : 0
+    let vLat = samples.length ? samples.reduce((s, d) => s + d[1], 0) / samples.length : 0
+    // Clamp the flick magnitude so a fast swipe glides briskly but stays read-
+    // able rather than blurring; tiny drifts below the floor never start a loop.
+    const speed = Math.hypot(vLng, vLat)
+    if (speed < INERTIA_MIN_SPEED) {
+      setSpinningBoth(false) // released without a flick — rest now, paint crisp
+      return
+    }
+    if (speed > INERTIA_MAX_SPEED) {
+      const k = INERTIA_MAX_SPEED / speed
+      vLng *= k
+      vLat *= k
+    }
+    const step = () => {
+      vLng *= INERTIA_FRICTION
+      vLat *= INERTIA_FRICTION
+      if (Math.hypot(vLng, vLat) < INERTIA_MIN_SPEED) {
+        inertiaRef.current = 0
+        setSpinningBoth(false) // glide settled — repaint crisp
+        return
+      }
+      const cur = rotationRef.current
+      const next = nextDragRotation(cur, (cur[0] ?? 0) + vLng, (cur[1] ?? 0) + vLat)
+      if (next) {
+        rotationRef.current = next
+        setRotation(next) // already one update per frame — no extra coalescing needed
+      }
+      inertiaRef.current = requestAnimationFrame(step)
+    }
+    inertiaRef.current = requestAnimationFrame(step)
+  }, [cancelInertia, setSpinningBoth])
+
+  // Cancel any in-flight frame / inertia loop when the globe unmounts so a
+  // late rAF can't call setState on a torn-down component.
+  useEffect(() => () => {
+    cancelRotationFrame()
+    cancelInertia()
+  }, [cancelRotationFrame, cancelInertia])
 
   // The single owner of "current zoom". Clamps to [MIN_ZOOM, MAX_ZOOM] so no
   // caller has to remember the bounds, then writes the ref (read by gesture
@@ -773,11 +902,16 @@ function Globe({
       .scale(radius)
       .clipAngle(90)
       .rotate(rotation)
-      .precision(0.4)
+      // Coarser tessellation while the globe is in motion (drag / glide) — the
+      // adaptive-resampling threshold a path subdivides to. The extra vertices
+      // a crisp 0.4 buys are imperceptible on a moving sphere but cost real time
+      // every frame; 1.6 paints ~the same silhouette far cheaper, then we snap
+      // back to crisp the instant it rests.
+      .precision(spinning ? 1.6 : 0.4)
     const path = d3.geoPath(projection)
     const graticule = d3.geoGraticule10()
     return { projection, path, graticule, radius }
-  }, [ready, rotation, zoom, size.height, size.width])
+  }, [ready, rotation, zoom, size.height, size.width, spinning])
 
   // ----- pointer drag + pinch-zoom -------------------------------------
   // One finger rotates; a second finger promotes the gesture to a pinch
@@ -802,6 +936,11 @@ function Globe({
 
   const onPointerDown = (event) => {
     event.currentTarget.blur?.()
+    // A fresh grab takes over: stop any glide already in flight and drop a
+    // queued coalesced frame so the new gesture starts from the live rotation.
+    cancelInertia()
+    cancelRotationFrame()
+    velocityRef.current.samples = []
     pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY })
     event.currentTarget.setPointerCapture?.(event.pointerId)
     if (pointersRef.current.size >= 2) {
@@ -815,6 +954,9 @@ function Globe({
         startZoom: zoomRef.current,
       }
     } else {
+      // Drag-rotate begins — mark the globe in-motion so the projection drops
+      // to the cheaper tessellation for the duration of the gesture + glide.
+      setSpinningBoth(true)
       dragRef.current = {
         active: true,
         moved: false,
@@ -902,7 +1044,10 @@ function Globe({
         })
         // null → this frame would cross a pole or inverted off-sphere; hold the
         // last good rotation (the gesture stays alive for the next move).
-        if (next) setRotationBoth(next)
+        if (next) {
+          recordVelocity(rotationRef.current, next)
+          scheduleRotation(next)
+        }
         return
       }
     }
@@ -912,7 +1057,10 @@ function Globe({
     const degPerPx = projectionData ? RAD2DEG / projectionData.radius : 0.4 / zoomRef.current
     const [startLng, startLat] = drag.startRotate
     const next = nextDragRotation(rotationRef.current, startLng + dx * degPerPx, startLat - dy * degPerPx)
-    if (next) setRotationBoth(next)
+    if (next) {
+      recordVelocity(rotationRef.current, next)
+      scheduleRotation(next)
+    }
   }
 
   const finishDrag = (event) => {
@@ -938,7 +1086,21 @@ function Globe({
       }
     }
     if (pointersRef.current.size > 0) return // other fingers still down
+    const wasDrag = dragRef.current.active && dragRef.current.moved
     dragRef.current.active = false
+
+    // Release glide — only when the finger actually dragged (a tap selects and
+    // must not spin). Drop any queued coalesced frame first so the inertia loop
+    // owns rotation outright and starts from the live value, then decay to rest.
+    // startInertia owns the spinning flag once a drag releases; a non-drag
+    // (tap, or a gesture that opened with a finger but never moved) rests now.
+    if (wasDrag) {
+      cancelRotationFrame()
+      startInertia()
+    } else {
+      setSpinningBoth(false)
+    }
+    velocityRef.current.samples = []
 
     // Tap means select — never zoom. A double-tap zoom used to live here
     // and it hijacked country selection (rapid taps read as zoom); pinch,
@@ -1254,9 +1416,11 @@ function BottomSheet({
   // Opening a country must NOT resize the sheet (owner feedback: the panel
   // jumped when you tapped a country). There is deliberately no auto-lift on
   // selection — the sheet stays at whatever height it's at, and the detail
-  // view fits within that band, scrolling internally when its content is
-  // taller (see .cb-detail overflow-y:auto). The user can still drag the
-  // handle up for more room; tapping a country just never moves it for them.
+  // view fits within that band: a fixed header + pinned action bar frame a
+  // single scrolling body (see .cb-detail-body overflow-y:auto), so the facts
+  // scroll internally while the name and CTAs stay put and nothing clips. The
+  // user can still drag the handle up for more room; tapping a country just
+  // never moves it for them.
 
   const minFrac = SHEET_MIN
   const stops = SHEET_STOPS_DEFAULT
@@ -1386,6 +1550,11 @@ function BottomSheet({
       >
         {selectedCountry && (
           <>
+            {/* Condensed STICKY header — flag + name + region on one compact
+                row, pinned to the top of the detail so the country you're
+                looking at never scrolls out of view. The flag is smaller than
+                the old 40px block so the header earns its keep on a short
+                sheet (peek height) instead of eating the facts below it. */}
             <div className="cb-detail-head">
               <span className="cb-detail-flag" aria-hidden="true">
                 {selectedCountry.flag || '🏳️'}
@@ -1419,27 +1588,32 @@ function BottomSheet({
               </button>
             </div>
 
-            {/* Basic-info card (Change 6): capital / population / surface area
-                / main languages, joined from the bundled facts by ISO-3.
-                Replaces the old thin region-only preview. Region + flag live in
-                the head above; this card carries the four richer facts. A row
-                whose value is unknown renders an em dash, never a wrong "0". */}
-            {infoRows.length > 0 ? (
-              <dl className="cb-info">
-                {infoRows.map((row) => (
-                  <div className="cb-info-row" key={row.key}>
-                    <dt>{row.label}</dt>
-                    <dd>{row.value}</dd>
-                  </div>
-                ))}
-              </dl>
-            ) : null}
+            {/* Scrollable body — the only region that scrolls. The sticky
+                header above and the sticky action bar below stay put, so on a
+                390px phone the country always has a visible identity and the
+                Been / Want-to-go CTAs are always one tap away, no matter how
+                tall the facts get or how short the sheet is dragged. */}
+            <div className="cb-detail-body">
+              {/* Basic-info card: capital / population / surface area / main
+                  languages, joined from the bundled facts by ISO-3. A row whose
+                  value is unknown renders an em dash, never a wrong "0". */}
+              {infoRows.length > 0 ? (
+                <dl className="cb-info">
+                  {infoRows.map((row) => (
+                    <div className="cb-info-row" key={row.key}>
+                      <dt>{row.label}</dt>
+                      <dd>{row.value}</dd>
+                    </div>
+                  ))}
+                </dl>
+              ) : null}
+            </div>
 
-            {/* Two independent status toggles, side by side (Change 5): 'Been'
-                (visited) and 'Want to go' (wishlist). Marking one clears the
-                other — a country you've been to isn't also somewhere you still
-                want to go — and each persists the same way (whole-list PUT of
-                visited.json / wishlist.json). */}
+            {/* Sticky action bar — two independent status toggles ('Been' /
+                'Want to go'). Marking one clears the other and each persists
+                the same way (whole-list PUT of visited.json / wishlist.json).
+                Pinned to the bottom so the primary action is always reachable
+                even when the facts scroll. */}
             <div className="cb-detail-actions">
               <button
                 type="button"
@@ -1688,7 +1862,7 @@ const CSS = `
 }
 .cb-detail-close:active { transform: scale(0.94); }
 .cb-list { overscroll-behavior: contain; }
-.cb-detail { overscroll-behavior: contain; }
+.cb-detail-body { overscroll-behavior: contain; }
 .cb-sheet-search input { font-size: 16px; }
 @media (hover: hover) {
   .cb-country:hover { fill: var(--cb-land-hover); }
@@ -2219,50 +2393,83 @@ const CSS = `
   flex: 1 1 auto;
   min-height: 0;
 }
-/* Detail view — shown while a country is selected. Big flag, name,
-   region, primary CTAs, close X. Kept mounted at all times so that
-   toggling back to the list never resets its scroll position. */
+/* Detail view — shown while a country is selected. Three bands: a fixed
+   condensed header, a single scrollable body, and a pinned action bar. The
+   detail itself does NOT scroll (only .cb-detail-body does), so the header and
+   CTAs never leave the screen and nothing clips at any sheet height. Kept
+   mounted at all times so toggling back to the list never resets scrollTop. */
 .cb-detail {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  /* Bottom-most surface: keep the CTAs clear of the home indicator
-     / gesture bar on notched phones. */
-  padding: 4px 18px max(24px, env(safe-area-inset-bottom));
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden; /* the body scrolls, not the shell */
+}
+/* Condensed header — pinned at the top of the detail. A hairline divider sets
+   it off from the scrolling facts; the negative-free padding keeps the flag,
+   name and close on one tidy 56px-ish row that survives the shortest sheet. */
+.cb-detail-head {
+  flex-shrink: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 16px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--cb-border) 70%, transparent);
+}
+.cb-detail-flag {
+  /* Smaller than the old 40px block: the header is a label now, not a hero, so
+     the facts below get the room. */
+  font-size: 30px;
+  line-height: 1;
+}
+.cb-detail-name {
+  min-width: 0; /* let the name ellipsize instead of pushing the close button off */
+}
+.cb-detail-name strong {
+  display: block;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cb-detail-name small {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The one scrolling region. Sits between the fixed header and the pinned
+   action bar; only this band overflows, so the facts can grow without
+   clipping and without dragging the CTAs off-screen. */
+.cb-detail-body {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-}
-.cb-detail-head {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  align-items: center;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
   gap: 14px;
-}
-.cb-detail-flag {
-  font-size: 40px;
-  line-height: 1;
-}
-.cb-detail-name strong {
-  display: block;
-  font-size: 20px;
-  font-weight: 600;
-  color: var(--text);
-  line-height: 1.2;
-}
-.cb-detail-name small {
-  display: block;
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--muted);
-  letter-spacing: 0.02em;
+  padding: 14px 16px;
 }
 /* Basic-info card (Change 6) — a definition list of capital / population /
    surface area / languages. Label muted, value in --text; rows separated by a
    hairline so the four facts read as a tidy table without heavy borders. */
 .cb-info {
   margin: 0;
+  /* Don't let the flex body squeeze the facts card: when the sheet is dragged
+     very short the body must scroll, not crush the card to a sliver. shrink:0
+     keeps the card at its natural height so .cb-detail-body overflows (and
+     scrolls) instead of clipping the rows. */
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   border: 1px solid var(--cb-border);
@@ -2322,10 +2529,18 @@ const CSS = `
   cursor: pointer;
   transition: transform 120ms ease, background 160ms ease, color 160ms ease;
 }
+/* Pinned action bar — flex-shrink:0 keeps it on-screen while the facts scroll.
+   The top divider + surface tint read it as a footer; the safe-area inset (now
+   that the shell dropped its own padding) keeps the CTAs clear of the home
+   indicator on notched phones. */
 .cb-detail-actions {
+  flex-shrink: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 10px;
+  padding: 12px 16px max(14px, env(safe-area-inset-bottom));
+  border-top: 1px solid color-mix(in srgb, var(--cb-border) 70%, transparent);
+  background: color-mix(in srgb, var(--cb-surface-strong) 70%, transparent);
 }
 .cb-detail-cta:active {
   transform: scale(0.985);
@@ -2484,17 +2699,17 @@ const CSS = `
 /* mobius-ui:Scrollskin v1 — keep in sync; library candidate. Slim
    token-colored scrollbar so desktop/web doesn't fall back to the raw
    OS default the mobile-first layout otherwise shows on wide screens. */
-.cb-list, .cb-detail {
+.cb-list, .cb-detail-body {
   scrollbar-width: thin;
   scrollbar-color: var(--cb-border) transparent;
 }
-.cb-list::-webkit-scrollbar, .cb-detail::-webkit-scrollbar {
+.cb-list::-webkit-scrollbar, .cb-detail-body::-webkit-scrollbar {
   width: 9px;
 }
-.cb-list::-webkit-scrollbar-track, .cb-detail::-webkit-scrollbar-track {
+.cb-list::-webkit-scrollbar-track, .cb-detail-body::-webkit-scrollbar-track {
   background: transparent;
 }
-.cb-list::-webkit-scrollbar-thumb, .cb-detail::-webkit-scrollbar-thumb {
+.cb-list::-webkit-scrollbar-thumb, .cb-detail-body::-webkit-scrollbar-thumb {
   background: var(--cb-border);
   border-radius: 999px;
   border: 2px solid transparent;

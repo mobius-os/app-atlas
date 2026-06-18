@@ -1,7 +1,7 @@
 {
   "id": "atlas",
   "name": "Atlas",
-  "version": "1.9.0",
+  "version": "1.9.1",
   "description": "Spin the globe, tap the countries you've visited, and watch your map fill in.",
   "author": "mobius-os",
   "license": "MIT",
