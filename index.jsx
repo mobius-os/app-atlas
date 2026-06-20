@@ -239,6 +239,18 @@ const MAX_ZOOM = 6
 // "a few taps" rather than a slow crawl.
 const ZOOM_STEP = 1.4
 
+// Zoom glide — wheel notches and +/- keys are DISCRETE: each one would jump
+// the radius in a single step (a visible staircase). Instead they set a zoom
+// TARGET and a per-frame follower eases the rendered zoom toward it
+//   zoom += (target - zoom) * ZOOM_EASE
+// the same critically-damped lerp the ISS-tracker globe uses for its camera.
+// 0.2/frame ≈ a ~0.2s glide — smooth but still snappy. A pinch is DIRECT
+// manipulation (finger-locked), so it bypasses the ease and sets zoom now;
+// only the discrete inputs glide. Below ZOOM_SNAP_EPS the follower is within
+// a pixel of the target, so it snaps exact and stops (no infinite asymptote).
+const ZOOM_EASE = 0.2
+const ZOOM_SNAP_EPS = 0.0005
+
 // Release inertia — when the finger lifts, the globe keeps spinning with the
 // velocity it had and decays by INERTIA_FRICTION each frame (≈0.92 → loses
 // ~8%/frame, a natural ~0.4s glide at 60fps). Below INERTIA_MIN_SPEED°/frame
@@ -615,6 +627,13 @@ function Globe({
   // that knows "how many fingers are down".
   const pointersRef = useRef(new Map())
   const zoomRef = useRef(1)
+  // Zoom glide — wheel/keys set zoomTargetRef (the zoom the user asked for);
+  // an rAF follower eases zoomRef → zoomTargetRef and mirrors it to state each
+  // frame. zoomGlideRafRef holds that loop's id so a new gesture / unmount can
+  // cancel it. Pinch writes zoomRef directly and parks the target alongside it,
+  // so a finger-locked pinch never fights a leftover glide.
+  const zoomTargetRef = useRef(1)
+  const zoomGlideRafRef = useRef(0)
   // rAF coalescing — a fast drag fires pointermove at 60–120Hz, but each
   // setRotation rebuilds the d3 projection + geoPath and repaints all ~195
   // country paths. Coalesce: gesture handlers stash the latest solved rotation
@@ -629,6 +648,13 @@ function Globe({
   // inertiaRef holds that loop's frame id so pointerdown / unmount can cancel it.
   const velocityRef = useRef({ vLng: 0, vLat: 0, samples: [] })
   const inertiaRef = useRef(0)
+  // Two independent motion sources can keep the globe "in motion": the
+  // release-inertia spin and the zoom glide. spinning (coarse tessellation)
+  // must stay true while EITHER runs, so each owns a boolean and the derived
+  // flag is their OR — without this, the first loop to settle would prematurely
+  // snap the projection crisp while the other is still animating.
+  const inertiaActiveRef = useRef(false)
+  const zoomGlideActiveRef = useRef(false)
   const [size, setSize] = useState({ width: 0, height: 0 })
   const [rotation, setRotation] = useState(INITIAL_ROTATION.slice())
   // zoom is a multiplier on the base radius; see MIN_ZOOM/MAX_ZOOM. Held in
@@ -644,11 +670,22 @@ function Globe({
   // snaps back the instant motion settles.
   const [spinning, setSpinning] = useState(false)
   const spinningRef = useRef(false)
-  const setSpinningBoth = useCallback((on) => {
+  // Recompute the public spinning flag from its two sources (drag/inertia and
+  // zoom glide) and push it to state only when it actually flips — so neither
+  // motion loop costs a render per frame, and whichever settles last is the one
+  // that finally repaints the globe crisp.
+  const syncSpinning = useCallback(() => {
+    const on = inertiaActiveRef.current || zoomGlideActiveRef.current
     if (spinningRef.current === on) return
     spinningRef.current = on
     setSpinning(on)
   }, [])
+  // Drag + release-inertia source toggle (kept named setSpinningBoth so its
+  // existing call sites read unchanged); the zoom glide owns the other source.
+  const setSpinningBoth = useCallback((on) => {
+    inertiaActiveRef.current = on
+    syncSpinning()
+  }, [syncSpinning])
   // depFailed used to be sticky for the rest of the session — a single
   // hiccupping import (e.g. SW updating mid-flight) blanked the globe
   // until full reload. Now it's paired with a counter that retries on
@@ -807,34 +844,102 @@ function Globe({
     inertiaRef.current = requestAnimationFrame(step)
   }, [cancelInertia, setSpinningBoth])
 
-  // Cancel any in-flight frame / inertia loop when the globe unmounts so a
-  // late rAF can't call setState on a torn-down component.
-  useEffect(() => () => {
-    cancelRotationFrame()
-    cancelInertia()
-  }, [cancelRotationFrame, cancelInertia])
+  // Stop the zoom-glide follower wherever it is and re-park the target at the
+  // frozen zoom. Called on pointerdown (a fresh grab/pinch interrupts the glide)
+  // and unmount. Re-parking matters: a glide interrupted mid-flight leaves the
+  // rendered zoom short of its old target — without resetting zoomTargetRef, the
+  // next wheel notch (zoomBy reads the target) would compound from the stale far
+  // target and jump. A subsequent pinch overwrites both anyway; this keeps the
+  // wheel/keys path honest.
+  const cancelZoomGlide = useCallback(() => {
+    if (zoomGlideRafRef.current) {
+      cancelAnimationFrame(zoomGlideRafRef.current)
+      zoomGlideRafRef.current = 0
+    }
+    zoomTargetRef.current = zoomRef.current
+    if (zoomGlideActiveRef.current) {
+      zoomGlideActiveRef.current = false
+      syncSpinning()
+    }
+  }, [syncSpinning])
+
+  // The zoom-glide follower. Each frame eases the rendered zoom toward the live
+  // target (zoomTargetRef, which wheel/keys keep updating) and mirrors it to
+  // state. The loop reads zoomRef — never the stale state captured in this
+  // closure — as the imperative source of truth, so successive notches just move
+  // the target and the in-flight loop picks it up. Within ZOOM_SNAP_EPS it lands
+  // exact and stops; the spinning flag drops with it so the globe repaints crisp.
+  const startZoomGlide = useCallback(() => {
+    if (zoomGlideRafRef.current) return // a frame is already queued; it reads the latest target
+    if (!zoomGlideActiveRef.current) {
+      zoomGlideActiveRef.current = true
+      syncSpinning() // coarse tessellation for the duration of the glide
+    }
+    const step = () => {
+      const target = zoomTargetRef.current
+      const cur = zoomRef.current
+      const next = cur + (target - cur) * ZOOM_EASE
+      if (Math.abs(target - next) < ZOOM_SNAP_EPS) {
+        zoomRef.current = target
+        setZoom(target)
+        zoomGlideRafRef.current = 0
+        zoomGlideActiveRef.current = false
+        syncSpinning() // glide settled — repaint crisp
+        return
+      }
+      zoomRef.current = next
+      setZoom(next)
+      zoomGlideRafRef.current = requestAnimationFrame(step)
+    }
+    zoomGlideRafRef.current = requestAnimationFrame(step)
+  }, [syncSpinning])
 
   // The single owner of "current zoom". Clamps to [MIN_ZOOM, MAX_ZOOM] so no
-  // caller has to remember the bounds, then writes the ref (read by gesture
-  // handlers) and state (drives the projection) together.
-  const setZoomBoth = useCallback((next) => {
-    const safe = Number.isFinite(next) && next > 0 ? next : zoomRef.current
-    const clamped = clamp(safe, MIN_ZOOM, MAX_ZOOM)
-    zoomRef.current = clamped
-    setZoom(clamped)
-  }, [])
+  // caller has to remember the bounds. Two modes:
+  //   ease=false (pinch): direct manipulation — write the ref + state NOW so the
+  //     globe scales finger-locked, and park the glide target alongside so a
+  //     leftover follower can't drag the zoom back.
+  //   ease=true (wheel/keys): set the target and let startZoomGlide ease the
+  //     rendered zoom toward it, turning a discrete notch into a smooth glide.
+  const setZoomBoth = useCallback(
+    (next, { ease = false } = {}) => {
+      const safe = Number.isFinite(next) && next > 0 ? next : zoomRef.current
+      const clamped = clamp(safe, MIN_ZOOM, MAX_ZOOM)
+      zoomTargetRef.current = clamped
+      if (ease) {
+        startZoomGlide()
+        return
+      }
+      cancelZoomGlide()
+      zoomRef.current = clamped
+      setZoom(clamped)
+    },
+    [startZoomGlide, cancelZoomGlide],
+  )
 
-  // Multiply the current zoom by a factor — the shape every input speaks
-  // (pinch ratio, wheel notch, +/- step). Multiplicative so a step feels
-  // the same whether you're zoomed in or out, and so it stays symmetric:
-  // factor f then 1/f returns you exactly where you started.
+  // Multiply the current TARGET zoom by a factor and glide there — the shape the
+  // discrete inputs speak (wheel notch, +/- step). Reads the target, not the
+  // live (mid-glide) zoom, so rapid notches compound smoothly instead of each
+  // one re-aiming from a half-finished position. Multiplicative so a step feels
+  // the same whether you're zoomed in or out, and symmetric: f then 1/f returns
+  // you exactly where you started. (Pinch does NOT go through here — it calls
+  // setZoomBoth directly with ease:false for finger-locked scaling.)
   const zoomBy = useCallback(
     (factor) => {
       if (!Number.isFinite(factor) || factor <= 0) return
-      setZoomBoth(zoomRef.current * factor)
+      setZoomBoth(zoomTargetRef.current * factor, { ease: true })
     },
     [setZoomBoth],
   )
+
+  // Cancel any in-flight frame / inertia / zoom-glide loop when the globe
+  // unmounts so a late rAF can't call setState on a torn-down component.
+  useEffect(() => () => {
+    cancelRotationFrame()
+    cancelInertia()
+    cancelZoomGlide()
+  }, [cancelRotationFrame, cancelInertia, cancelZoomGlide])
+
 
   // Repair inverted-winding features once d3-geo is loaded. Some source
   // features (here: Bermuda) ship an outer ring wound the wrong way; d3-geo
@@ -936,9 +1041,11 @@ function Globe({
 
   const onPointerDown = (event) => {
     event.currentTarget.blur?.()
-    // A fresh grab takes over: stop any glide already in flight and drop a
-    // queued coalesced frame so the new gesture starts from the live rotation.
+    // A fresh grab takes over: stop any glide already in flight (rotation OR
+    // zoom) and drop a queued coalesced frame so the new gesture starts from the
+    // live rotation/zoom.
     cancelInertia()
+    cancelZoomGlide()
     cancelRotationFrame()
     velocityRef.current.samples = []
     pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY })
