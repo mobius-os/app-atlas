@@ -38,10 +38,12 @@ const {
   formatArea,
   formatLanguages,
   formatPopulation,
+  hasUnsyncedFlag,
   lookupCountryInfo,
   nextDragRotation,
   orderCountriesForList,
   pickRotatingSaying,
+  setUnsyncedFlag,
   solveVersorDrag,
   toggleCountryStatus,
 } = await import('./.build/index.mjs')
@@ -404,4 +406,38 @@ test('cacheRead migrates the old Visited localStorage prefix to Atlas', () => {
   assert.equal(values.get(CACHE_KEY('app-1', 'visited.json')), JSON.stringify(['CAN']))
 
   delete globalThis.localStorage
+})
+
+// The unsynced flag is the durability marker boot reads to decide whether the
+// local cache is AHEAD of the server (a save that failed) — so it MUST survive
+// a reload and round-trip cleanly. Without it, boot prefers the stale server
+// copy and the failed write vanishes silently.
+test('unsynced flag round-trips through localStorage and is scoped per app', () => {
+  const values = new Map()
+  globalThis.localStorage = {
+    getItem: (key) => values.has(key) ? values.get(key) : null,
+    setItem: (key, value) => values.set(key, value),
+    removeItem: (key) => values.delete(key),
+  }
+
+  assert.equal(hasUnsyncedFlag('app-1'), false)
+  setUnsyncedFlag('app-1', true)
+  assert.equal(hasUnsyncedFlag('app-1'), true)
+  // Per-app scope: setting app-1 must not leak into app-2.
+  assert.equal(hasUnsyncedFlag('app-2'), false)
+  // Clearing removes it (a successful save → cache and server agree).
+  setUnsyncedFlag('app-1', false)
+  assert.equal(hasUnsyncedFlag('app-1'), false)
+
+  delete globalThis.localStorage
+})
+
+// No localStorage (private mode / SSR) must degrade silently, never throw —
+// the durability marker is a nice-to-have, not a hard dependency.
+test('unsynced flag degrades silently with no localStorage', () => {
+  const saved = globalThis.localStorage
+  delete globalThis.localStorage
+  assert.equal(hasUnsyncedFlag('app-1'), false)
+  assert.doesNotThrow(() => setUnsyncedFlag('app-1', true))
+  if (saved) globalThis.localStorage = saved
 })

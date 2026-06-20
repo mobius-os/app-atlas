@@ -466,28 +466,49 @@ export function cacheWrite(appId, name, data) {
   }
 }
 
-// Dedupe a country list by iso3, keeping the first occurrence. The
-// bundled GeoJSON ships duplicate entries for CYP / GUF / SOM, which
-// (a) inflates the total count, and (b) produces duplicate React keys.
-// We log a warning so the dupe doesn't go silent if the seed ever changes.
+// A persisted "the local cache holds writes the server hasn't accepted" flag.
+// Unlike the in-memory unsyncedRef, this survives a cold reload, so the boot
+// path can tell a stale-but-confirmed server copy ("nothing local is pending")
+// apart from one that's BEHIND a failed local save ("trust the cache, union it
+// in"). Without this, a save that failed and then a reload would read the
+// stale server copy and silently drop the toggle. Set on save failure, cleared
+// the moment a PUT succeeds. The native offline runtime tracks this itself via
+// pendingCount(); this flag is the no-runtime / runtime-threw fallback.
+export const UNSYNCED_KEY = (appId) => `atlas-app:${appId}:unsynced`
+export function setUnsyncedFlag(appId, on) {
+  if (typeof localStorage === 'undefined') return
+  try {
+    if (on) localStorage.setItem(UNSYNCED_KEY(appId), '1')
+    else localStorage.removeItem(UNSYNCED_KEY(appId))
+  } catch {
+    // Quota or private-mode — silent; degrades to the pre-flag behaviour.
+  }
+}
+export function hasUnsyncedFlag(appId) {
+  if (typeof localStorage === 'undefined') return false
+  try {
+    return localStorage.getItem(UNSYNCED_KEY(appId)) === '1'
+  } catch {
+    return false
+  }
+}
+
+// Dedupe a country list by iso3, keeping the first occurrence. The bundled
+// GeoJSON ships duplicate entries for CYP / GUF / SOM, which (a) inflate the
+// total count, and (b) produce duplicate React keys. The dupes are a KNOWN,
+// expected property of the seed — collapsing them is the whole point of this
+// function, so it does NOT warn: the prior console.warn fired on EVERY boot
+// (the seed always carries those three), which is console noise, not a signal.
 function dedupeCountries(list) {
   if (!Array.isArray(list)) return []
   const seen = new Set()
   const out = []
-  const dupes = []
   for (const c of list) {
     const iso3 = c?.iso3
     if (!iso3) continue
-    if (seen.has(iso3)) {
-      dupes.push(iso3)
-      continue
-    }
+    if (seen.has(iso3)) continue
     seen.add(iso3)
     out.push(c)
-  }
-  if (dupes.length) {
-    // eslint-disable-next-line no-console
-    console.warn('Atlas: dropped duplicate iso3 entries from seed', dupes)
   }
   return out
 }
@@ -695,25 +716,39 @@ function Globe({
 
   // d3-geo lives at runtime — resolved by the app frame's import map to the
   // self-hosted /vendor/d3-geo@3 bundle (no longer esm.sh), so the globe works
-  // offline-deterministically with no third-party CDN hop. A 5s timeout still
-  // races the import so a cold-start can't hang on the fetch indefinitely (the
-  // same-origin /vendor module is normally instant, but the SW may be priming).
-  // depAttempt is in the dep array so the reconnect retry below can force
-  // another attempt.
+  // offline-deterministically with no third-party CDN hop. A 5s timeout flips
+  // the screen to the "still loading / retry" state so a cold-start can't sit on
+  // a blank globe indefinitely (the same-origin /vendor module is normally
+  // instant, but the SW may be priming). depAttempt is in the dep array so the
+  // reconnect retry below can force another attempt.
+  //
+  // The import and the timeout are tracked SEPARATELY, not via Promise.race:
+  // race resolves to whichever settles first and DISCARDS the loser, so a real
+  // import that resolved at 5.1s (just after the timeout) was thrown away and
+  // the globe stayed broken for the whole session. Here the import's success
+  // handler ALWAYS wins when it eventually arrives — even past the timeout — so
+  // a slow-but-successful load still renders. The timeout only surfaces the
+  // retry affordance; it is not a failure, and it never cancels the import.
   useEffect(() => {
     let active = true
     const timeoutMs = 5000
     let timeoutId = 0
-    const timeoutPromise = new Promise((_, reject) => {
-      timeoutId = setTimeout(() => reject(new Error('d3-geo load timed out')), timeoutMs)
-    })
     setDepFailed(false)
-    Promise.race([import('d3-geo'), timeoutPromise])
+    timeoutId = setTimeout(() => {
+      // A timeout is NOT a load failure — if the import is still in flight it
+      // may yet succeed (and the .then below will pick it up). We only show the
+      // retry state when the module hasn't landed yet.
+      if (active && !d3Ref.current) setDepFailed(true)
+    }, timeoutMs)
+    import('d3-geo')
       .then((mod) => {
         clearTimeout(timeoutId)
         if (!active) return
+        // Late success after a timeout: adopt the module and clear the retry
+        // state. This is the fix for the dropped-late-winner bug.
         d3Ref.current = mod
         setReady(true)
+        setDepFailed(false)
       })
       .catch((err) => {
         clearTimeout(timeoutId)
@@ -743,7 +778,7 @@ function Globe({
   // Track the visible size of the SVG host so the projection rescales when
   // the bottom sheet drags up/down.
   useEffect(() => {
-    if (!containerRef.current) return
+    if (!containerRef.current) return undefined
     const measure = () => {
       if (!containerRef.current) return
       setSize({
@@ -752,6 +787,11 @@ function Globe({
       })
     }
     measure()
+    // ResizeObserver is near-universal but absent in some embedded webviews and
+    // SSR — guard it so its absence degrades to a one-time measure() (the
+    // projection still renders at the initial size) instead of throwing on
+    // `new ResizeObserver` and blanking the whole globe.
+    if (typeof ResizeObserver === 'undefined') return undefined
     const observer = new ResizeObserver(measure)
     observer.observe(containerRef.current)
     return () => observer.disconnect()
@@ -1508,6 +1548,7 @@ function BottomSheet({
   selectedCountry,
   query,
   statusFilter,
+  loading,
   onQueryChange,
   onFilterChange,
   onSelect,
@@ -1589,6 +1630,38 @@ function BottomSheet({
   // sheet can wedge in mid-drag after iOS Safari yanks capture.
   const onHandleLost = endDrag
 
+  // Keyboard resize for the handle (it's a role="separator", which the WAI-ARIA
+  // pattern requires to be operable by keyboard, not just pointer drag). Arrow
+  // up/down nudge by 5% of the viewport; PageUp/Down jump to the next/previous
+  // snap stop; Home/End go to the min/max. Without this, a keyboard or
+  // switch-control user could never resize the sheet at all.
+  const KEY_STEP = 0.05
+  const onHandleKeyDown = (event) => {
+    let handled = true
+    if (event.key === 'ArrowUp' || event.key === 'ArrowRight') {
+      setFrac((f) => clamp(f + KEY_STEP, minFrac, SHEET_MAX))
+    } else if (event.key === 'ArrowDown' || event.key === 'ArrowLeft') {
+      setFrac((f) => clamp(f - KEY_STEP, minFrac, SHEET_MAX))
+    } else if (event.key === 'Home') {
+      setFrac(minFrac)
+    } else if (event.key === 'End') {
+      setFrac(SHEET_MAX)
+    } else if (event.key === 'PageUp') {
+      setFrac((f) => stops.find((s) => s > f + 1e-6) ?? SHEET_MAX)
+    } else if (event.key === 'PageDown') {
+      setFrac((f) => [...stops].reverse().find((s) => s < f - 1e-6) ?? minFrac)
+    } else {
+      handled = false
+    }
+    if (handled) event.preventDefault()
+  }
+  // aria-value* describe the separator's position as a whole-number percent of
+  // the viewport, so assistive tech announces "42%, min 34, max 80" — the same
+  // band the pointer drag clamps to.
+  const ariaNow = Math.round(frac * 100)
+  const ariaMin = Math.round(minFrac * 100)
+  const ariaMax = Math.round(SHEET_MAX * 100)
+
   // The body of the sheet (list / detail) accepts drag-down too — but
   // only when the inner scroller is at the top. If the user is scrolling
   // a long list, we want native scroll; if they're at the top and pull
@@ -1640,8 +1713,14 @@ function BottomSheet({
         onPointerUp={onHandleUp}
         onPointerCancel={onHandleUp}
         onLostPointerCapture={onHandleLost}
+        onKeyDown={onHandleKeyDown}
         role="separator"
-        aria-label="Resize sheet"
+        tabIndex={0}
+        aria-label="Resize country list"
+        aria-orientation="horizontal"
+        aria-valuenow={ariaNow}
+        aria-valuemin={ariaMin}
+        aria-valuemax={ariaMax}
       >
         <span className="cb-sheet-grip" />
       </div>
@@ -1827,7 +1906,15 @@ function BottomSheet({
           onPointerCancel={onBodyUp}
           onLostPointerCapture={onBodyUp}
         >
-          {countries.length === 0 ? (
+          {loading ? (
+            // While the world is still loading, the list is empty only because
+            // the data hasn't arrived — NOT because nothing matches. Showing
+            // "No countries match" here contradicted the globe's "Loading the
+            // world…" spinner (two opposite messages at once). Mirror the
+            // loading copy until the data lands, then fall through to the real
+            // empty-states below.
+            <div className="cb-list-empty" role="status">Loading the world…</div>
+          ) : countries.length === 0 ? (
             <div className="cb-list-empty">
               {query
                 ? 'No countries match.'
@@ -2365,6 +2452,19 @@ const CSS = `
   touch-action: none;
   cursor: ns-resize;
 }
+/* The handle is keyboard-operable (role=separator, tabindex 0, arrow-key
+   resize). Inset the shared focus ring so it reads inside the short 26px row
+   instead of bleeding into the list/globe above and below. */
+.cb-sheet-handle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
+  border-radius: 8px;
+}
+@media (hover: hover) {
+  .cb-sheet-handle:hover .cb-sheet-grip {
+    background: color-mix(in srgb, var(--text) 36%, transparent);
+  }
+}
 .cb-sheet-grip {
   width: 34px;
   height: 4px;
@@ -2428,9 +2528,14 @@ const CSS = `
   color: var(--muted);
 }
 .cb-sheet-search-clear {
+  /* 44px hit target (WCAG 2.5.8); the visible glyph stays small because the
+     button centres it. Was 28px — below the 44px floor for a touch target. */
   flex-shrink: 0;
-  min-width: 28px;
-  min-height: 28px;
+  min-width: 44px;
+  min-height: 44px;
+  /* The search pill is ~44px tall, so a 44px button fits without negative
+     margin; pull it 6px into the pill's right padding so it sits flush. */
+  margin: 0 -6px 0 0;
   display: grid;
   place-items: center;
   padding: 0;
@@ -2726,10 +2831,13 @@ const CSS = `
 /* 'Want to go' star toggle — wishlist orange when on, hollow when off.
    Same 40px hit target as the visited ring so the two read as a pair. */
 .cb-row-want {
+  /* 44px hit target (WCAG 2.5.8). The 56px row absorbs the extra height via the
+     negative vertical margin, so the row stays the same size; only the tap
+     surface grows. Was 40px — under the 44px floor. */
   flex: 0 0 auto;
-  width: 40px;
-  height: 40px;
-  margin: -8px -2px -8px 0;
+  width: 44px;
+  height: 44px;
+  margin: -10px -2px -10px 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2756,10 +2864,12 @@ const CSS = `
    marking 195 countries, so this turns "row → detail → mark → back" into a
    single tap. */
 .cb-row-mark {
+  /* 44px hit target (WCAG 2.5.8). Negative vertical margin keeps the 56px row
+     unchanged; only the tap surface grows. Was 40px — under the 44px floor. */
   flex: 0 0 auto;
-  width: 40px;
-  height: 40px;
-  margin: -8px -4px -8px 0;
+  width: 44px;
+  height: 44px;
+  margin: -10px -4px -10px 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2881,6 +2991,17 @@ export default function Atlas({ appId, token }) {
   // listener below — offline cold-reload that later connects shouldn't be
   // stuck on the empty state forever.
   const bootInFlightRef = useRef(false)
+  // Set true when boot restores a cache that the server hasn't accepted yet (a
+  // persisted unsynced flag). An effect watching this kicks one retry so the
+  // dirty write flushes without waiting for an 'online' event or the next tap.
+  const bootDirtyRef = useRef(false)
+  // True while the last server PUT failed and the local cache holds writes the
+  // server has not accepted. The retry effect fires only while this is set, so a
+  // save that lost the network can re-sync — independent of whether the country
+  // list is loaded. Cleared the moment a PUT succeeds. Declared HERE, above
+  // boot(), because boot() reads it when restoring a persisted-unsynced cache;
+  // keeping the declaration before its first reader removes any TDZ doubt.
+  const unsyncedRef = useRef(false)
   const boot = useCallback(async () => {
     if (bootInFlightRef.current) return
     bootInFlightRef.current = true
@@ -2918,23 +3039,44 @@ export default function Atlas({ appId, token }) {
       const wishlistList = freshWishlist || cachedWishlist || []
       let nextVisited = new Set(visitedList)
       let nextWishlist = new Set(wishlistList.filter((iso3) => !nextVisited.has(iso3)))
-      // Don't clobber in-progress offline toggles. If the runtime outbox
-      // still has unsynced writes (pendingCount > 0), the server copy we
-      // just read is older than the user's local taps — replacing state
-      // with it would wipe visited/wishlist toggles made while offline.
-      // Union the server set with the local in-progress sets instead, with
-      // visited winning over wishlist (the same exclusivity the toggles use).
+      // Don't clobber in-progress offline toggles. Two ways the local copy can
+      // be AHEAD of the server copy we just read:
+      //   1. the runtime outbox still has queued writes (pendingCount > 0); or
+      //   2. a raw PUT failed and we persisted the unsynced flag (no runtime, or
+      //      the runtime threw) — the dirty write lives only in the localStorage
+      //      cache, which DID survive the reload even though latestVisitedRef
+      //      did not. We must union the CACHED sets in this case, not the
+      //      (empty-on-cold-boot) refs.
+      // In either case, replacing state with the stale server copy would wipe
+      // the user's toggles, so we union — visited winning over wishlist (the
+      // same exclusivity the toggles use).
       let unsynced = 0
       try {
         unsynced = await storage.pendingCount()
       } catch {
         unsynced = 0
       }
-      if (unsynced > 0) {
-        nextVisited = new Set([...nextVisited, ...latestVisitedRef.current])
+      const persistedUnsynced = hasUnsyncedFlag(appId)
+      if (unsynced > 0 || persistedUnsynced) {
+        const localVisited = persistedUnsynced
+          ? toIsoSet(cachedVisited).size ? toIsoSet(cachedVisited) : latestVisitedRef.current
+          : latestVisitedRef.current
+        const localWishlist = persistedUnsynced
+          ? toIsoSet(cachedWishlist).size ? toIsoSet(cachedWishlist) : latestWishlistRef.current
+          : latestWishlistRef.current
+        nextVisited = new Set([...nextVisited, ...localVisited])
         nextWishlist = new Set(
-          [...nextWishlist, ...latestWishlistRef.current].filter((iso3) => !nextVisited.has(iso3)),
+          [...nextWishlist, ...localWishlist].filter((iso3) => !nextVisited.has(iso3)),
         )
+        // Re-arm the retry so the dirty write actually flushes after this boot:
+        // mark in-memory unsynced and queue a save once the chain is wired. The
+        // queueSave effect (below) reads unsyncedRef; an 'online' tick or the
+        // first post-boot toggle then flushes. We queue here too so a boot while
+        // already online retries without waiting for an event.
+        if (persistedUnsynced) {
+          unsyncedRef.current = true
+          bootDirtyRef.current = true
+        }
       }
       setVisited(nextVisited)
       setWishlist(nextWishlist)
@@ -3210,6 +3352,13 @@ export default function Atlas({ appId, token }) {
   // only kick off ONE follow-up PUT (using the latest visited Set) when
   // the in-flight one settles.
   const pendingSaveRef = useRef(false)
+  // unsyncedRef is declared above boot() (its first reader) to avoid any TDZ
+  // doubt — see its comment up there.
+  // Set by the retry effect to a fn that cancels any pending backoff + resets
+  // the ladder; the save success branch calls it so a recovered sync stops the
+  // retry loop. A ref (not a direct call) because queueSave is defined before
+  // the effect that owns the backoff state.
+  const syncedRef = useRef(() => {})
 
   const queueSave = useCallback(
     (countryForErr) => {
@@ -3223,28 +3372,123 @@ export default function Atlas({ appId, token }) {
           pendingSaveRef.current = false
           const visitedSnapshot = Array.from(latestVisitedRef.current)
           const wishlistSnapshot = Array.from(latestWishlistRef.current)
+          // Durability invariant: a write is cached locally BEFORE the PUT that
+          // can throw, never after. The pre-v1.9.3 code cached only on the
+          // success line below the throwing storage.set, so a failed save left
+          // NOTHING in localStorage — a reconnect-then-cold-reload then read the
+          // stale server copy and the toggle vanished silently. Caching first
+          // means the user's tap survives on this device no matter how the
+          // server PUT goes; the cache is the source of truth until the server
+          // confirms.
+          cacheWrite(appId, 'visited.json', visitedSnapshot)
+          cacheWrite(appId, 'wishlist.json', wishlistSnapshot)
           try {
             await storage.set('visited.json', visitedSnapshot)
             await storage.set('wishlist.json', wishlistSnapshot)
-            cacheWrite(appId, 'visited.json', visitedSnapshot)
-            cacheWrite(appId, 'wishlist.json', wishlistSnapshot)
+            // Server accepted the write — the cache and server now agree.
+            unsyncedRef.current = false
+            setUnsyncedFlag(appId, false)
+            syncedRef.current() // cancel any pending backoff retry
+            setError((prev) =>
+              prev && prev.startsWith("Couldn't sync") ? '' : prev,
+            )
           } catch (err) {
             // eslint-disable-next-line no-console
             console.error('Atlas:save failed', err)
-            // We can't safely "roll back" here because the user has likely
-            // toggled OTHER countries in the meantime — restoring a stale
-            // snapshot would clobber their newer taps. Instead surface an
-            // error; the next online tick will re-sync from the server.
+            // Mark the data as unsynced so the reconnect retry knows there is
+            // work to flush, AND persist that across a reload so boot trusts the
+            // cache instead of the stale server copy. We do NOT roll back the
+            // in-memory Sets: the user has likely toggled OTHER countries since,
+            // and restoring a stale snapshot would clobber their newer taps. The
+            // local cache (written above) holds the truth; surface a soft,
+            // non-destructive notice.
+            unsyncedRef.current = true
+            setUnsyncedFlag(appId, true)
             setError(
               countryForErr
-                ? `Could not save ${countryForErr.displayName} just now — try again in a moment.`
-                : 'Could not save your changes just now — try again in a moment.',
+                ? `Couldn't sync ${countryForErr.displayName} yet — saved on this device; it'll sync when you're back online.`
+                : `Couldn't sync your changes yet — saved on this device; they'll sync when you're back online.`,
             )
           }
         })
     },
     [appId, storage],
   )
+
+  // Retry path for a save that didn't reach the server. Gated on unsyncedRef —
+  // "do we still have writes the server hasn't accepted?" — NOT on
+  // countries.length (which is non-zero for the whole post-boot session, so the
+  // pre-v1.9.3 boot-retry guard never fired for a failed save). queueSave
+  // already coalesces onto the LATEST Sets, so one re-queue flushes everything
+  // that's pending.
+  //
+  // Two triggers, because a save can fail two ways:
+  //   1. the network dropped → the 'online' event flushes the moment it's back;
+  //   2. the server hiccupped while we were still online (a transient 5xx) →
+  //      no 'online' event will ever come, so we also schedule a bounded
+  //      exponential backoff. Backoff IS the right structural fix here (not a
+  //      band-aid): the work is a network round-trip that can legitimately fail
+  //      transiently, and the only correct response is to try again later with
+  //      increasing spacing rather than busy-loop or give up. retryRef lets both
+  //      triggers call the freshest queueSave without re-subscribing listeners.
+  const retryRef = useRef(() => {})
+  const backoffRef = useRef({ timer: 0, delay: 0 })
+  useEffect(() => {
+    const scheduleBackoff = () => {
+      const state = backoffRef.current
+      if (state.timer) return // a retry is already scheduled
+      // 2s, 4s, 8s … capped at 60s. Reset to 0 once a save succeeds.
+      state.delay = state.delay ? Math.min(state.delay * 2, 60000) : 2000
+      state.timer = setTimeout(() => {
+        state.timer = 0
+        if (unsyncedRef.current) {
+          queueSave(null)
+          // queueSave runs async; re-arm the next backoff step in case this
+          // attempt also fails. The success path (below) cancels it.
+          scheduleBackoff()
+        }
+      }, state.delay)
+    }
+    retryRef.current = (reason) => {
+      if (!unsyncedRef.current) return
+      // A real reconnect resets the backoff ladder — we have a fresh shot.
+      if (reason === 'online') {
+        const state = backoffRef.current
+        if (state.timer) { clearTimeout(state.timer); state.timer = 0 }
+        state.delay = 0
+      }
+      queueSave(null)
+      scheduleBackoff()
+    }
+    // Cancel a pending backoff + reset the ladder once the data syncs again.
+    // The save success branch calls this via syncedRef.
+    syncedRef.current = () => {
+      const state = backoffRef.current
+      if (state.timer) { clearTimeout(state.timer); state.timer = 0 }
+      state.delay = 0
+    }
+  }, [queueSave])
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    const onOnline = () => retryRef.current('online')
+    window.addEventListener('online', onOnline)
+    return () => {
+      window.removeEventListener('online', onOnline)
+      const state = backoffRef.current
+      if (state.timer) { clearTimeout(state.timer); state.timer = 0 }
+    }
+  }, [])
+
+  // After a boot that restored an unsynced cache, kick exactly one retry so the
+  // dirty write flushes without waiting for an 'online' event or the next tap.
+  // bootDirtyRef is set inside boot(); we clear it here so this fires once per
+  // dirty boot. retryRef is wired by the effect above, so depending on it (via
+  // the queueSave dep) guarantees it's ready before we call.
+  useEffect(() => {
+    if (!bootDirtyRef.current) return
+    bootDirtyRef.current = false
+    retryRef.current('boot')
+  }, [loading, queueSave])
 
   // Optimistic toggle: flip the local Set immediately so the toggle feels
   // instant, then queue a save against the LATEST state. We do NOT roll
@@ -3388,6 +3632,7 @@ export default function Atlas({ appId, token }) {
         selectedCountry={selectedCountry}
         query={query}
         statusFilter={statusFilter}
+        loading={loading}
         onQueryChange={setQuery}
         onFilterChange={changeStatusFilter}
         onSelect={selectCountry}
