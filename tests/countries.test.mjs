@@ -26,24 +26,22 @@ execFileSync(esbuild, [
 })
 
 const {
-  CACHE_KEY,
-  LEGACY_CACHE_KEY,
+  PREF_KEY,
   ROTATION_SINGULARITY_LAT,
   STATUS_FILTERS,
   angularStepDeg,
-  cacheRead,
-  cacheWrite,
   easePointerToDisc,
   filterCountriesByStatus,
   formatArea,
   formatLanguages,
   formatPopulation,
-  hasUnsyncedFlag,
   lookupCountryInfo,
+  mergeCodeSets,
   nextDragRotation,
   orderCountriesForList,
   pickRotatingSaying,
-  setUnsyncedFlag,
+  prefRead,
+  prefWrite,
   solveVersorDrag,
   toggleCountryStatus,
 } = await import('./.build/index.mjs')
@@ -391,28 +389,12 @@ test('lookupCountryInfo + formatters: bundled facts join by ISO-3, missing data 
   assert.equal(formatLanguages([]), '—')
 })
 
-test('cacheRead migrates the old Visited localStorage prefix to Atlas', () => {
-  const values = new Map()
-  globalThis.localStorage = {
-    getItem: (key) => values.has(key) ? values.get(key) : null,
-    setItem: (key, value) => values.set(key, value),
-  }
-  values.set(LEGACY_CACHE_KEY('app-1', 'visited.json'), JSON.stringify(['USA', 'JPN']))
-
-  assert.deepEqual(cacheRead('app-1', 'visited.json'), ['USA', 'JPN'])
-  assert.equal(values.get(CACHE_KEY('app-1', 'visited.json')), JSON.stringify(['USA', 'JPN']))
-
-  cacheWrite('app-1', 'visited.json', ['CAN'])
-  assert.equal(values.get(CACHE_KEY('app-1', 'visited.json')), JSON.stringify(['CAN']))
-
-  delete globalThis.localStorage
-})
-
-// The unsynced flag is the durability marker boot reads to decide whether the
-// local cache is AHEAD of the server (a save that failed) — so it MUST survive
-// a reload and round-trip cleanly. Without it, boot prefers the stale server
-// copy and the failed write vanishes silently.
-test('unsynced flag round-trips through localStorage and is scoped per app', () => {
+// The status filter is the ONLY thing Atlas keeps in localStorage now — a
+// device-local VIEW preference (not codes, never round-tripped). It must
+// round-trip cleanly and stay scoped per app. (The codes themselves persist
+// through useDocument; their durability is covered by the runtime's own
+// mobiusRuntimeStore tests, not here.)
+test('the status-filter preference round-trips through localStorage, scoped per app', () => {
   const values = new Map()
   globalThis.localStorage = {
     getItem: (key) => values.has(key) ? values.get(key) : null,
@@ -420,24 +402,62 @@ test('unsynced flag round-trips through localStorage and is scoped per app', () 
     removeItem: (key) => values.delete(key),
   }
 
-  assert.equal(hasUnsyncedFlag('app-1'), false)
-  setUnsyncedFlag('app-1', true)
-  assert.equal(hasUnsyncedFlag('app-1'), true)
-  // Per-app scope: setting app-1 must not leak into app-2.
-  assert.equal(hasUnsyncedFlag('app-2'), false)
-  // Clearing removes it (a successful save → cache and server agree).
-  setUnsyncedFlag('app-1', false)
-  assert.equal(hasUnsyncedFlag('app-1'), false)
+  assert.equal(prefRead('app-1', 'status-filter'), null)
+  prefWrite('app-1', 'status-filter', 'visited')
+  assert.equal(prefRead('app-1', 'status-filter'), 'visited')
+  assert.equal(values.get(PREF_KEY('app-1', 'status-filter')), JSON.stringify('visited'))
+  // Per-app scope: app-1's preference must not leak into app-2.
+  assert.equal(prefRead('app-2', 'status-filter'), null)
 
   delete globalThis.localStorage
 })
 
 // No localStorage (private mode / SSR) must degrade silently, never throw —
-// the durability marker is a nice-to-have, not a hard dependency.
-test('unsynced flag degrades silently with no localStorage', () => {
+// a view preference is a nice-to-have, not a hard dependency.
+test('the preference helpers degrade silently with no localStorage', () => {
   const saved = globalThis.localStorage
   delete globalThis.localStorage
-  assert.equal(hasUnsyncedFlag('app-1'), false)
-  assert.doesNotThrow(() => setUnsyncedFlag('app-1', true))
+  assert.equal(prefRead('app-1', 'status-filter'), null)
+  assert.doesNotThrow(() => prefWrite('app-1', 'status-filter', 'wishlist'))
   if (saved) globalThis.localStorage = saved
+})
+
+// mergeCodeSets is the heart of the useDocument migration's convergence: under
+// mode:'lww' it must UNION adds (no code lost when two contexts each add one)
+// while still honoring a removal THIS context made — the property pure union
+// (the runtime's default merge) can't express, which is why Atlas passes its
+// own merge.
+test('mergeCodeSets unions adds from both contexts (no code lost)', () => {
+  // base = what this context last saw; mine = base + JPN; theirs = base + USA.
+  const base = ['CAN']
+  const mine = ['CAN', 'JPN']
+  const theirs = ['CAN', 'USA']
+  const merged = mergeCodeSets(base, mine, theirs)
+  // Both the local add (JPN) and the concurrent remote add (USA) survive.
+  assert.deepEqual(new Set(merged), new Set(['CAN', 'JPN', 'USA']))
+})
+
+test('mergeCodeSets honors a removal this context made (untoggle is not reverted)', () => {
+  // This context removed DEU; the server copy still has it (stale). The remove
+  // must stick — a pure union would silently re-add DEU and revert the untoggle.
+  const base = ['DEU', 'FRA']
+  const mine = ['FRA']            // DEU untoggled here
+  const theirs = ['DEU', 'FRA']   // server hasn't caught up
+  const merged = mergeCodeSets(base, mine, theirs)
+  assert.deepEqual(new Set(merged), new Set(['FRA']))
+})
+
+test('mergeCodeSets keeps a code another context added even as this one removes a different code', () => {
+  const base = ['DEU', 'FRA']
+  const mine = ['FRA']             // removed DEU
+  const theirs = ['DEU', 'FRA', 'ITA']  // another context added ITA
+  const merged = mergeCodeSets(base, mine, theirs)
+  // DEU dropped (our removal), ITA kept (their add) — adds win, our remove honored.
+  assert.deepEqual(new Set(merged), new Set(['FRA', 'ITA']))
+})
+
+test('mergeCodeSets dedupes and preserves mine-first order for stable React keys', () => {
+  const merged = mergeCodeSets(['USA'], ['USA', 'CAN'], ['CAN', 'JPN', 'USA'])
+  // mine's order leads (USA, CAN), then theirs contributes the new JPN.
+  assert.deepEqual(merged, ['USA', 'CAN', 'JPN'])
 })

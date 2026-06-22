@@ -17,17 +17,15 @@ const COUNTRY_FACTS = {"AFG":{"cap":"Kabul","pop":37172386,"area":652230,"lang":
 // COUNTRY_FACTS:END
 
 // --------------------------------------------------------------------------
-// Storage shim — probe runtime on every call, fall back to fetch on miss.
+// Read-only storage shim for the static world geometry.
 // --------------------------------------------------------------------------
-// The Möbius offline runtime exposes window.mobius.storage. It can be
-// injected AFTER the app boots (the shell installs it post-mount on some
-// paths), so caching `native` at construction time wedges every later call
-// into the direct-fetch path even when the runtime is alive. Other apps
-// (app-gym, notes, habits) all probe at call time — we follow that pattern.
-//
-// Each method also falls back to fetch when the runtime is present but
-// throws — a single bad runtime call shouldn't poison the rest of the
-// session.
+// The mutable user data (visited / wishlist codes) persists through
+// useDocument — the runtime owns its durability, offline mirror, and
+// cross-context reconciliation (see Atlas below). The ONE thing left for a
+// plain read is countries.geo.json: a large, static, precached file we only
+// ever GET. We probe the runtime per call (the shell can install it
+// post-mount on some paths) and fall back to a direct fetch so a missing
+// runtime still loads the world.
 function makeStorage({ appId, token }) {
   const auth = { Authorization: `Bearer ${token}` }
   const base = `/api/storage/apps/${appId}`
@@ -60,46 +58,98 @@ function makeStorage({ appId, token }) {
     }
   }
 
-  async function set(path, data) {
-    const native = probe()
-    if (native && typeof native.set === 'function') {
-      try {
-        return await native.set(path, data)
-      } catch {
-        // fall through to direct PUT
-      }
-    }
-    const r = await fetch(`${base}/${path}`, {
-      method: 'PUT',
-      headers: { ...auth, 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    })
-    if (!r.ok) throw new Error(`storage set ${path}: ${r.status}`)
-    return { synced: true }
-  }
-
-  // pendingCount surfaces the runtime outbox depth. Returns 0 when there
-  // is no runtime (no outbox to surface).
-  async function pendingCount() {
-    const native = probe()
-    if (native && typeof native.pendingCount === 'function') {
-      try {
-        return await native.pendingCount()
-      } catch {
-        return 0
-      }
-    }
-    return 0
-  }
-
   // hasRuntime is a *probe*, not a cached boolean — readers call it when
   // they need a fresh answer (the SyncPill uses it on every render).
   function hasRuntime() {
     return !!probe()
   }
 
-  return { get, set, pendingCount, hasRuntime }
+  return { get, hasRuntime }
 }
+
+// Bind the document hook ONCE at module top to the React this app already
+// imports — `const useDocument = window.mobius.createUseDocument(React)`.
+// Both app hosts (app-frame.html, standalone.py) init() the runtime before
+// importing this module, so window.mobius is present at eval time. The
+// fallback keeps the no-runtime/test path alive: a hook that reads/writes the
+// app's own storage directly, with the SAME { value, status, update, set,
+// refresh } shape, so the component code is identical either way. It cannot
+// merge or reconcile across contexts — that's the runtime's job — but it
+// preserves single-context read/add/remove/toggle when no runtime exists.
+export function bindUseDocument(React) {
+  if (typeof window !== 'undefined' && window.mobius?.createUseDocument) {
+    return window.mobius.createUseDocument(React)
+  }
+  return makeFallbackUseDocument(React)
+}
+
+function makeFallbackUseDocument(React) {
+  return function useDocument(path, opts = {}) {
+    const initial = typeof opts.initial === 'function' ? opts.initial() : (opts.initial ?? null)
+    const [state, setState] = React.useState({ value: initial, status: 'loading', lastError: null })
+    const valueRef = React.useRef(initial)
+    const chainRef = React.useRef(Promise.resolve())
+    const tokenRef = React.useRef(opts.token)
+    tokenRef.current = opts.token
+    const set = (value, status = 'ready', lastError = null) => {
+      valueRef.current = value
+      setState({ value, status, lastError })
+    }
+    const direct = React.useCallback(async (method, body) => {
+      const headers = { Authorization: `Bearer ${tokenRef.current}` }
+      if (body !== undefined) headers['Content-Type'] = 'application/json'
+      const r = await fetch(`/api/storage/apps/${opts.appId}/${path}`, {
+        method,
+        headers,
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      })
+      return r
+    }, [path, opts.appId])
+    const refresh = React.useCallback(async () => {
+      try {
+        const r = await direct('GET')
+        const text = r.ok ? await r.text() : ''
+        const next = text ? JSON.parse(text) : initial
+        set(next, 'ready', null)
+        return next
+      } catch (e) {
+        setState((prev) => ({ ...prev, status: 'error', lastError: e }))
+        throw e
+      }
+    }, [direct, initial])
+    React.useEffect(() => { refresh().catch(() => {}) }, [refresh])
+    const update = React.useCallback((fn) => {
+      const run = async () => {
+        const next = fn(valueRef.current)
+        set(next, 'saving', null)
+        const r = await direct('PUT', next)
+        if (!r.ok) {
+          const err = new Error(`storage ${path}: ${r.status}`)
+          set(valueRef.current, 'error', err)
+          throw err
+        }
+        set(next, 'ready', null)
+        return { durability: 'synced' }
+      }
+      const p = chainRef.current.then(run, run)
+      chainRef.current = p.then(() => {}, () => {})
+      return p
+    }, [direct])
+    return { value: state.value, status: state.status, lastError: state.lastError, update, set: (v) => update(() => v), refresh }
+  }
+}
+
+// Stable identity for a code list: the bare ISO-3 string. useDocument reuses
+// item ids by content identity — for primitive codes the code IS the id, so
+// reconciliation never re-mints or reorders a code already present.
+const codeIdentity = (code) => String(code)
+// Shared empty seed for both code docs. A module-level constant (not a fresh
+// [] per render) keeps useDocument's `initial` referentially stable, so its
+// effects don't re-fire every render.
+const EMPTY_CODES = []
+
+// Bound once for the whole module — every Atlas mount shares this hook.
+const useDocument = bindUseDocument(React)
 
 // --------------------------------------------------------------------------
 // Helpers.
@@ -430,67 +480,61 @@ export function formatLanguages(languages, max = 3) {
   return extra > 0 ? `${shown.join(', ')} +${extra}` : shown.join(', ')
 }
 
-// localStorage cache keys — the offline runtime caches storage.get reads
-// but cold-reload-without-runtime needs *some* local mirror or the boot
-// screen shows nothing forever. We mirror atlas + countries on every
-// successful read; the boot path consults the cache first if the network
-// read returns null. Scoped by appId so two installs don't collide. The
-// legacy `visited-app:` prefix preserves offline cache across the Visited
-// -> Atlas rename.
-export const CACHE_KEY = (appId, name) => `atlas-app:${appId}:${name}`
-export const LEGACY_CACHE_KEY = (appId, name) => `visited-app:${appId}:${name}`
+// The status filter (all / visited / wishlist) is a DEVICE-LOCAL VIEW
+// PREFERENCE, not user data — it never round-trips to the server and never
+// needs to converge across devices, so it lives in localStorage, scoped by
+// appId. This is the ONLY thing Atlas keeps in localStorage. The codes
+// themselves (visited.json / wishlist.json) persist exclusively through
+// useDocument (see Atlas below); there is no separate local mirror of the
+// codes — the runtime's offline read-through cache is the single offline
+// store, so there is no two-copy "distrust" cache to keep in sync.
+export const PREF_KEY = (appId, name) => `atlas-app:${appId}:${name}`
 
-export function cacheRead(appId, name) {
+export function prefRead(appId, name) {
   if (typeof localStorage === 'undefined') return null
   try {
-    const key = CACHE_KEY(appId, name)
-    const legacyKey = LEGACY_CACHE_KEY(appId, name)
-    const raw = localStorage.getItem(key)
-    if (raw) return JSON.parse(raw)
-    const legacyRaw = localStorage.getItem(legacyKey)
-    if (!legacyRaw) return null
-    const value = JSON.parse(legacyRaw)
-    try { localStorage.setItem(key, JSON.stringify(value)) } catch {}
-    return value
+    const raw = localStorage.getItem(PREF_KEY(appId, name))
+    return raw ? JSON.parse(raw) : null
   } catch {
     return null
   }
 }
 
-export function cacheWrite(appId, name, data) {
+export function prefWrite(appId, name, data) {
   if (typeof localStorage === 'undefined') return
   try {
-    localStorage.setItem(CACHE_KEY(appId, name), JSON.stringify(data))
+    localStorage.setItem(PREF_KEY(appId, name), JSON.stringify(data))
   } catch {
-    // Quota or private-mode — silent; cache is a nice-to-have.
+    // Quota or private-mode — silent; a view preference is a nice-to-have.
   }
 }
 
-// A persisted "the local cache holds writes the server hasn't accepted" flag.
-// Unlike the in-memory unsyncedRef, this survives a cold reload, so the boot
-// path can tell a stale-but-confirmed server copy ("nothing local is pending")
-// apart from one that's BEHIND a failed local save ("trust the cache, union it
-// in"). Without this, a save that failed and then a reload would read the
-// stale server copy and silently drop the toggle. Set on save failure, cleared
-// the moment a PUT succeeds. The native offline runtime tracks this itself via
-// pendingCount(); this flag is the no-runtime / runtime-threw fallback.
-export const UNSYNCED_KEY = (appId) => `atlas-app:${appId}:unsynced`
-export function setUnsyncedFlag(appId, on) {
-  if (typeof localStorage === 'undefined') return
-  try {
-    if (on) localStorage.setItem(UNSYNCED_KEY(appId), '1')
-    else localStorage.removeItem(UNSYNCED_KEY(appId))
-  } catch {
-    // Quota or private-mode — silent; degrades to the pre-flag behaviour.
+// Three-way set merge for an array of ISO-3 codes under mode:'lww'. The
+// invariant: an ADD is never lost (a code present in EITHER side stays),
+// and a REMOVE this context made (in `base`, absent in `mine`) is honored
+// unless `theirs` re-added it — i.e. converged value = theirs ∪ (mine−base)
+// − (base−mine). Pure union (the default merge) can't express a removal,
+// so an untoggle would silently revert; this is why Atlas passes its own
+// merge. Same-code add-vs-remove across contexts resolves last-writer-wins,
+// which is what 'lww' promises. dedupe preserves `mine`'s order for stable
+// React keys; case/identity is the bare code.
+export function mergeCodeSets(base, mine, theirs) {
+  const baseSet = toIsoSet(base)
+  const mineSet = toIsoSet(mine)
+  const theirsArr = Array.isArray(theirs) ? theirs.filter(Boolean) : []
+  // Codes this context deliberately removed: in base, gone from mine.
+  const removedHere = new Set([...baseSet].filter((code) => !mineSet.has(code)))
+  const out = []
+  const seen = new Set()
+  const push = (code) => {
+    if (!code || seen.has(code) || removedHere.has(code)) return
+    seen.add(code)
+    out.push(code)
   }
-}
-export function hasUnsyncedFlag(appId) {
-  if (typeof localStorage === 'undefined') return false
-  try {
-    return localStorage.getItem(UNSYNCED_KEY(appId)) === '1'
-  } catch {
-    return false
-  }
+  // `mine` first so its order wins; then any code the other side contributed.
+  for (const code of mine || []) push(code)
+  for (const code of theirsArr) push(code)
+  return out
 }
 
 // Dedupe a country list by iso3, keeping the first occurrence. The bundled
@@ -1879,7 +1923,7 @@ function BottomSheet({
 
           {/* Status filter — icon-only segmented control beside the search
               box. Filters the list (and dims non-matching countries on the
-              globe); the choice persists across sessions via cacheWrite. */}
+              globe); the choice persists per-device via prefWrite. */}
           <div className="cb-filters" role="group" aria-label="Filter countries by status">
             {FILTER_CHIPS.map((chip) => (
               <button
@@ -2007,26 +2051,40 @@ function BottomSheet({
 // --------------------------------------------------------------------------
 // Sync pill — surfaces offline state next to the counter.
 // --------------------------------------------------------------------------
-// Only the offline state is surfaced. Local saves are instant and reliable;
-// outbox depth ("Saving · N pending") is internal plumbing the owner doesn't
-// need to read. Online → null (clean steady state).
-// hasRuntime=false means the runtime didn't load (dev/fallback) — writes
-// go direct to the server, so there's no outbox to surface. Hide the pill
-// in that mode rather than lie about a queue that doesn't exist.
-function SyncPill({ online, hasRuntime }) {
+// Offline is the primary state surfaced; a transient online "Saving…" appears
+// while a durable write is in flight (useDocument status==='saving') so a
+// queued change isn't invisible. Online + idle → null (clean steady state).
+// hasRuntime=false means the runtime didn't load (dev/fallback) — there's no
+// offline outbox to surface, so the pill stays hidden in that mode.
+function SyncPill({ online, hasRuntime, saving = false }) {
   if (!hasRuntime) return null
-  if (online) return null
-  return (
-    <span
-      className="cb-pill cb-pill--offline"
-      role="status"
-      aria-live="polite"
-      title="You're offline — taps will sync when you're back online."
-    >
-      <span className="cb-pill-dot" aria-hidden="true" />
-      Offline
-    </span>
-  )
+  if (!online) {
+    return (
+      <span
+        className="cb-pill cb-pill--offline"
+        role="status"
+        aria-live="polite"
+        title="You're offline — taps will sync when you're back online."
+      >
+        <span className="cb-pill-dot" aria-hidden="true" />
+        Offline
+      </span>
+    )
+  }
+  if (saving) {
+    return (
+      <span
+        className="cb-pill cb-pill--saving"
+        role="status"
+        aria-live="polite"
+        title="Saving your change…"
+      >
+        <span className="cb-pill-dot" aria-hidden="true" />
+        Saving…
+      </span>
+    )
+  }
+  return null
 }
 
 // --------------------------------------------------------------------------
@@ -2311,6 +2369,14 @@ const CSS = `
 }
 .cb-pill--offline .cb-pill-dot {
   background: color-mix(in srgb, var(--text) 50%, transparent);
+}
+/* Saving — a transient online state while a durable write is in flight. The
+   accent dot reads as "working", distinct from the muted offline dot. */
+.cb-pill--saving {
+  color: var(--accent);
+}
+.cb-pill--saving .cb-pill-dot {
+  background: var(--accent);
 }
 /* /mobius-ui:SyncPill */
 
@@ -2950,31 +3016,67 @@ export default function Atlas({ appId, token }) {
   const storage = useMemo(() => makeStorage({ appId, token }), [appId, token])
 
   const [countries, setCountries] = useState([])
-  const [visited, setVisited] = useState(() => new Set())
-  const [wishlist, setWishlist] = useState(() => new Set())
+
+  // The codes persist through useDocument — ONE document per code-file, the
+  // existing storage layout (visited.json / wishlist.json as arrays of ISO-3).
+  // mode:'lww' because every toggle is idempotent set membership; mergeCodeSets
+  // makes cross-context convergence a UNION (no add ever lost) while still
+  // honoring this context's removals. identity = the bare code, so a code is
+  // never re-minted or reordered. This single hook replaces the whole former
+  // distrust subsystem: the localStorage codes cache, the persisted unsynced
+  // flag, the serialized save-chain + backoff retry, and the boot read-union —
+  // useDocument's optimistic read-your-writes + durable writes + subscribe-
+  // driven reconciliation do all of it.
+  const docOpts = useMemo(
+    () => ({
+      initial: EMPTY_CODES,
+      identity: codeIdentity,
+      merge: mergeCodeSets,
+      mode: 'lww',
+      appId,
+      token,
+    }),
+    [appId, token],
+  )
+  const visitedDoc = useDocument('visited.json', docOpts)
+  const wishlistDoc = useDocument('wishlist.json', docOpts)
+  // Render needs Sets (Globe / BottomSheet call .has / .size). Derive them from
+  // the docs' optimistic values; visited wins over wishlist for any code that
+  // a UNION-converged write left in both (the same exclusivity the toggles
+  // enforce) so a country is never painted two states at once.
+  const visited = useMemo(() => toIsoSet(visitedDoc.value), [visitedDoc.value])
+  const wishlist = useMemo(() => {
+    const v = toIsoSet(visitedDoc.value)
+    return new Set([...toIsoSet(wishlistDoc.value)].filter((iso3) => !v.has(iso3)))
+  }, [visitedDoc.value, wishlistDoc.value])
+
   const [selectedIso3, setSelectedIso3] = useState('')
   const [query, setQuery] = useState('')
-  // Status filter (all / visited / wishlist) — persisted per device via the
-  // localStorage cache (it's a view preference, not data worth a server
-  // round-trip), restored on boot so the list opens the way it was left.
+  // Status filter (all / visited / wishlist) — a device-local VIEW preference
+  // (not user data worth a server round-trip), restored on mount so the list
+  // opens the way it was left. This is the only localStorage Atlas keeps.
   const [statusFilter, setStatusFilter] = useState(() => {
-    const saved = cacheRead(appId, 'status-filter')
+    const saved = prefRead(appId, 'status-filter')
     return STATUS_FILTERS.includes(saved) ? saved : 'all'
   })
-  const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   // Track online status so the SyncPill can announce offline mode.
   const [online, setOnline] = useState(
     typeof navigator !== 'undefined' ? navigator.onLine !== false : true,
   )
+
+  // Loading is the geometry read only — the codes hydrate independently through
+  // useDocument (optimistic value renders immediately, status reports its own
+  // progress). Boot no longer gates on the codes.
+  const [loading, setLoading] = useState(true)
   // Distinguishes "fetched empty list" from "couldn't fetch at all". When
   // offline, storage.get returns null; the boot path flips this flag so we
   // can render an "offline — using last-known state" banner instead of
   // pretending the world has zero countries.
   const [offlineBoot, setOfflineBoot] = useState(false)
-  // Did we manage to render anything for the user? Drives the offline banner
-  // copy — "showing your last visited list" only when we actually have one.
-  const [hasCachedVisited, setHasCachedVisited] = useState(false)
+  // True once we have any visited codes to show — drives the offline banner
+  // copy ("showing your last visited list" only when we actually have one).
+  const hasCachedVisited = visited.size > 0
 
   // Hero saying (Change 4) — replaces the old big visited count, which just
   // duplicated the visited stamps already on the map. ONE line is picked at
@@ -2987,111 +3089,26 @@ export default function Atlas({ appId, token }) {
   const heroSaying = sayingIndex >= 0 ? ROTATING_SAYINGS[sayingIndex] : ''
 
   // ----- boot ----------------------------------------------------------
-  // boot() lives outside the effect so we can re-run it from the online
-  // listener below — offline cold-reload that later connects shouldn't be
-  // stuck on the empty state forever.
+  // boot() loads ONLY the static world geometry now. The codes hydrate
+  // independently through useDocument (its own read-through cache, optimistic
+  // value, and subscribe-driven reconciliation) — so the whole former "read
+  // visited/wishlist + union against in-flight local writes" dance is gone.
+  // boot() lives outside the effect so the online listener can re-run it when
+  // an offline cold-start later connects; it's idempotent (bootInFlightRef).
   const bootInFlightRef = useRef(false)
-  // Set true when boot restores a cache that the server hasn't accepted yet (a
-  // persisted unsynced flag). An effect watching this kicks one retry so the
-  // dirty write flushes without waiting for an 'online' event or the next tap.
-  const bootDirtyRef = useRef(false)
-  // True while the last server PUT failed and the local cache holds writes the
-  // server has not accepted. The retry effect fires only while this is set, so a
-  // save that lost the network can re-sync — independent of whether the country
-  // list is loaded. Cleared the moment a PUT succeeds. Declared HERE, above
-  // boot(), because boot() reads it when restoring a persisted-unsynced cache;
-  // keeping the declaration before its first reader removes any TDZ doubt.
-  const unsyncedRef = useRef(false)
   const boot = useCallback(async () => {
     if (bootInFlightRef.current) return
     bootInFlightRef.current = true
     try {
       setLoading(true)
-      // Promise.allSettled, not Promise.all — when only one side fails we
-      // still want to keep the side that succeeded (Promise.all discards
-      // both on any failure, which used to wipe the visited list when the
-      // countries fetch hiccupped).
-      const [countriesResult, visitedResult, wishlistResult] = await Promise.allSettled([
-        storage.get('countries.geo.json'),
-        storage.get('visited.json'),
-        storage.get('wishlist.json'),
-      ])
-      const rawCountries =
-        countriesResult.status === 'fulfilled' ? countriesResult.value : null
-      const rawVisited =
-        visitedResult.status === 'fulfilled' ? visitedResult.value : null
-      const rawWishlist =
-        wishlistResult.status === 'fulfilled' ? wishlistResult.value : null
-
-      // Countries: prefer fresh, fall back to local cache, dedupe by iso3.
-      const cachedCountries = cacheRead(appId, 'countries.geo.json')
+      const rawCountries = await storage.get('countries.geo.json')
       const freshCountries = Array.isArray(rawCountries) ? rawCountries : null
-      const countriesList = dedupeCountries(freshCountries || cachedCountries || [])
+      const countriesList = dedupeCountries(freshCountries || [])
       setCountries(countriesList)
-      if (freshCountries) cacheWrite(appId, 'countries.geo.json', freshCountries)
-
-      // Visited countries: prefer fresh, fall back to local cache.
-      const cachedVisited = cacheRead(appId, 'visited.json')
-      const freshVisited = Array.isArray(rawVisited) ? rawVisited : null
-      const visitedList = freshVisited || cachedVisited || []
-      const cachedWishlist = cacheRead(appId, 'wishlist.json')
-      const freshWishlist = Array.isArray(rawWishlist) ? rawWishlist : null
-      const wishlistList = freshWishlist || cachedWishlist || []
-      let nextVisited = new Set(visitedList)
-      let nextWishlist = new Set(wishlistList.filter((iso3) => !nextVisited.has(iso3)))
-      // Don't clobber in-progress offline toggles. Two ways the local copy can
-      // be AHEAD of the server copy we just read:
-      //   1. the runtime outbox still has queued writes (pendingCount > 0); or
-      //   2. a raw PUT failed and we persisted the unsynced flag (no runtime, or
-      //      the runtime threw) — the dirty write lives only in the localStorage
-      //      cache, which DID survive the reload even though latestVisitedRef
-      //      did not. We must union the CACHED sets in this case, not the
-      //      (empty-on-cold-boot) refs.
-      // In either case, replacing state with the stale server copy would wipe
-      // the user's toggles, so we union — visited winning over wishlist (the
-      // same exclusivity the toggles use).
-      let unsynced = 0
-      try {
-        unsynced = await storage.pendingCount()
-      } catch {
-        unsynced = 0
-      }
-      const persistedUnsynced = hasUnsyncedFlag(appId)
-      if (unsynced > 0 || persistedUnsynced) {
-        const localVisited = persistedUnsynced
-          ? toIsoSet(cachedVisited).size ? toIsoSet(cachedVisited) : latestVisitedRef.current
-          : latestVisitedRef.current
-        const localWishlist = persistedUnsynced
-          ? toIsoSet(cachedWishlist).size ? toIsoSet(cachedWishlist) : latestWishlistRef.current
-          : latestWishlistRef.current
-        nextVisited = new Set([...nextVisited, ...localVisited])
-        nextWishlist = new Set(
-          [...nextWishlist, ...localWishlist].filter((iso3) => !nextVisited.has(iso3)),
-        )
-        // Re-arm the retry so the dirty write actually flushes after this boot:
-        // mark in-memory unsynced and queue a save once the chain is wired. The
-        // queueSave effect (below) reads unsyncedRef; an 'online' tick or the
-        // first post-boot toggle then flushes. We queue here too so a boot while
-        // already online retries without waiting for an event.
-        if (persistedUnsynced) {
-          unsyncedRef.current = true
-          bootDirtyRef.current = true
-        }
-      }
-      setVisited(nextVisited)
-      setWishlist(nextWishlist)
-      latestVisitedRef.current = nextVisited
-      latestWishlistRef.current = nextWishlist
-      // Mirror the state we actually set (the unioned set when we preserved
-      // in-progress toggles), not the raw server copy — otherwise the next
-      // cold start would read a cache that's missing the offline toggles.
-      if (freshVisited) cacheWrite(appId, 'visited.json', Array.from(nextVisited))
-      if (freshWishlist) cacheWrite(appId, 'wishlist.json', Array.from(nextWishlist))
-      setHasCachedVisited((freshVisited || cachedVisited || []).length > 0)
 
       // If we ended up with zero countries AND the network is offline, the
       // banner is honest: "offline, here's what we cached". If we have
-      // countries (from cache or net), no banner.
+      // countries (the runtime serves the precached copy offline), no banner.
       const isOffline =
         typeof navigator !== 'undefined' && navigator.onLine === false
       setOfflineBoot(countriesList.length === 0 && isOffline)
@@ -3111,7 +3128,7 @@ export default function Atlas({ appId, token }) {
       setLoading(false)
       bootInFlightRef.current = false
     }
-  }, [appId, storage])
+  }, [storage])
 
   useEffect(() => {
     boot().catch(() => {})
@@ -3157,10 +3174,27 @@ export default function Atlas({ appId, token }) {
     (next) => {
       if (!STATUS_FILTERS.includes(next)) return
       setStatusFilter(next)
-      cacheWrite(appId, 'status-filter', next)
+      prefWrite(appId, 'status-filter', next)
     },
     [appId],
   )
+
+  // Surface a durable-write failure. doc.update REJECTS on a dead-letter (a
+  // fatal 4xx the server refused) and sets doc.lastError; we must not let that
+  // read as "saved". The toggle handlers catch the rejection to set this, and
+  // we also watch lastError so a refused background reconcile shows too. A
+  // transient/offline write is NOT an error — it queues durably and drains
+  // later (status==='saving' drives the SyncPill), so only a real dead-letter
+  // lands here.
+  const [writeError, setWriteError] = useState('')
+  useEffect(() => {
+    const err = visitedDoc.lastError || wishlistDoc.lastError
+    if (err) {
+      setWriteError(
+        "Couldn't save your change — it was rejected. Your other taps are safe; try again.",
+      )
+    }
+  }, [visitedDoc.lastError, wishlistDoc.lastError])
 
   const visitedCount = visited.size
   const totalCount = countries.length
@@ -3331,205 +3365,56 @@ export default function Atlas({ appId, token }) {
     }
   }, [])
 
-  // ----- serialized save queue ----------------------------------------
-  // The whole-list PUT model means rapid taps on different countries used
-  // to fire parallel PUTs; tap B could land before tap A, then A's
-  // rollback wiped B's correct value (or vice versa). We now serialize
-  // PUTs through a single in-flight Promise — every save waits its turn.
-  // Pending writes coalesce on the LATEST visited/wishlist Sets (last-writer-wins),
-  // which is exactly the "merge multiple taps into one PUT" behaviour
-  // the user expects when they're rapid-firing through Europe.
-  const saveChainRef = useRef(Promise.resolve())
-  const latestVisitedRef = useRef(visited)
-  const latestWishlistRef = useRef(wishlist)
-  useEffect(() => {
-    latestVisitedRef.current = visited
-  }, [visited])
-  useEffect(() => {
-    latestWishlistRef.current = wishlist
-  }, [wishlist])
-  // Coalesce flag — if multiple taps land while one PUT is in flight, we
-  // only kick off ONE follow-up PUT (using the latest visited Set) when
-  // the in-flight one settles.
-  const pendingSaveRef = useRef(false)
-  // unsyncedRef is declared above boot() (its first reader) to avoid any TDZ
-  // doubt — see its comment up there.
-  // Set by the retry effect to a fn that cancels any pending backoff + resets
-  // the ladder; the save success branch calls it so a recovered sync stops the
-  // retry loop. A ref (not a direct call) because queueSave is defined before
-  // the effect that owns the backoff state.
-  const syncedRef = useRef(() => {})
-
-  const queueSave = useCallback(
-    (countryForErr) => {
-      // Mark a follow-up; if a save was already pending, no need to add
-      // another link — the existing tail will pick up latestVisitedRef.
-      if (pendingSaveRef.current) return
-      pendingSaveRef.current = true
-      saveChainRef.current = saveChainRef.current
-        .catch(() => {}) // swallow prior errors so the chain keeps moving
-        .then(async () => {
-          pendingSaveRef.current = false
-          const visitedSnapshot = Array.from(latestVisitedRef.current)
-          const wishlistSnapshot = Array.from(latestWishlistRef.current)
-          // Durability invariant: a write is cached locally BEFORE the PUT that
-          // can throw, never after. The pre-v1.9.3 code cached only on the
-          // success line below the throwing storage.set, so a failed save left
-          // NOTHING in localStorage — a reconnect-then-cold-reload then read the
-          // stale server copy and the toggle vanished silently. Caching first
-          // means the user's tap survives on this device no matter how the
-          // server PUT goes; the cache is the source of truth until the server
-          // confirms.
-          cacheWrite(appId, 'visited.json', visitedSnapshot)
-          cacheWrite(appId, 'wishlist.json', wishlistSnapshot)
-          try {
-            await storage.set('visited.json', visitedSnapshot)
-            await storage.set('wishlist.json', wishlistSnapshot)
-            // Server accepted the write — the cache and server now agree.
-            unsyncedRef.current = false
-            setUnsyncedFlag(appId, false)
-            syncedRef.current() // cancel any pending backoff retry
-            setError((prev) =>
-              prev && prev.startsWith("Couldn't sync") ? '' : prev,
-            )
-          } catch (err) {
-            // eslint-disable-next-line no-console
-            console.error('Atlas:save failed', err)
-            // Mark the data as unsynced so the reconnect retry knows there is
-            // work to flush, AND persist that across a reload so boot trusts the
-            // cache instead of the stale server copy. We do NOT roll back the
-            // in-memory Sets: the user has likely toggled OTHER countries since,
-            // and restoring a stale snapshot would clobber their newer taps. The
-            // local cache (written above) holds the truth; surface a soft,
-            // non-destructive notice.
-            unsyncedRef.current = true
-            setUnsyncedFlag(appId, true)
-            setError(
-              countryForErr
-                ? `Couldn't sync ${countryForErr.displayName} yet — saved on this device; it'll sync when you're back online.`
-                : `Couldn't sync your changes yet — saved on this device; they'll sync when you're back online.`,
-            )
-          }
-        })
-    },
-    [appId, storage],
-  )
-
-  // Retry path for a save that didn't reach the server. Gated on unsyncedRef —
-  // "do we still have writes the server hasn't accepted?" — NOT on
-  // countries.length (which is non-zero for the whole post-boot session, so the
-  // pre-v1.9.3 boot-retry guard never fired for a failed save). queueSave
-  // already coalesces onto the LATEST Sets, so one re-queue flushes everything
-  // that's pending.
+  // ----- toggles -------------------------------------------------------
+  // A toggle is one idempotent set-membership flip. useDocument owns ALL the
+  // durability that used to live here: the optimistic value renders the flip
+  // instantly (read-your-writes), update() serializes writes per document so
+  // rapid taps never race, and a queued/offline write drains itself — no
+  // save-chain, no backoff retry, no unsynced flag, no localStorage mirror.
   //
-  // Two triggers, because a save can fail two ways:
-  //   1. the network dropped → the 'online' event flushes the moment it's back;
-  //   2. the server hiccupped while we were still online (a transient 5xx) →
-  //      no 'online' event will ever come, so we also schedule a bounded
-  //      exponential backoff. Backoff IS the right structural fix here (not a
-  //      band-aid): the work is a network round-trip that can legitimately fail
-  //      transiently, and the only correct response is to try again later with
-  //      increasing spacing rather than busy-loop or give up. retryRef lets both
-  //      triggers call the freshest queueSave without re-subscribing listeners.
-  const retryRef = useRef(() => {})
-  const backoffRef = useRef({ timer: 0, delay: 0 })
-  useEffect(() => {
-    const scheduleBackoff = () => {
-      const state = backoffRef.current
-      if (state.timer) return // a retry is already scheduled
-      // 2s, 4s, 8s … capped at 60s. Reset to 0 once a save succeeds.
-      state.delay = state.delay ? Math.min(state.delay * 2, 60000) : 2000
-      state.timer = setTimeout(() => {
-        state.timer = 0
-        if (unsyncedRef.current) {
-          queueSave(null)
-          // queueSave runs async; re-arm the next backoff step in case this
-          // attempt also fails. The success path (below) cancels it.
-          scheduleBackoff()
-        }
-      }, state.delay)
-    }
-    retryRef.current = (reason) => {
-      if (!unsyncedRef.current) return
-      // A real reconnect resets the backoff ladder — we have a fresh shot.
-      if (reason === 'online') {
-        const state = backoffRef.current
-        if (state.timer) { clearTimeout(state.timer); state.timer = 0 }
-        state.delay = 0
-      }
-      queueSave(null)
-      scheduleBackoff()
-    }
-    // Cancel a pending backoff + reset the ladder once the data syncs again.
-    // The save success branch calls this via syncedRef.
-    syncedRef.current = () => {
-      const state = backoffRef.current
-      if (state.timer) { clearTimeout(state.timer); state.timer = 0 }
-      state.delay = 0
-    }
-  }, [queueSave])
-  useEffect(() => {
-    if (typeof window === 'undefined') return undefined
-    const onOnline = () => retryRef.current('online')
-    window.addEventListener('online', onOnline)
-    return () => {
-      window.removeEventListener('online', onOnline)
-      const state = backoffRef.current
-      if (state.timer) { clearTimeout(state.timer); state.timer = 0 }
-    }
-  }, [])
-
-  // After a boot that restored an unsynced cache, kick exactly one retry so the
-  // dirty write flushes without waiting for an 'online' event or the next tap.
-  // bootDirtyRef is set inside boot(); we clear it here so this fires once per
-  // dirty boot. retryRef is wired by the effect above, so depending on it (via
-  // the queueSave dep) guarantees it's ready before we call.
-  useEffect(() => {
-    if (!bootDirtyRef.current) return
-    bootDirtyRef.current = false
-    retryRef.current('boot')
-  }, [loading, queueSave])
-
-  // Optimistic toggle: flip the local Set immediately so the toggle feels
-  // instant, then queue a save against the LATEST state. We do NOT roll
-  // back per-tap because rapid taps would fight each other on rollback —
-  // see queueSave for the error-handling rationale.
-  const toggleVisited = useCallback(
-    (country) => {
+  // visited and wishlist are mutually exclusive, so marking one clears the
+  // other: we write BOTH documents (each its own serialized update). We pass a
+  // FULL next array computed from each doc's current optimistic value (the raw
+  // code arrays, not the render-derived Sets, which already cross-filter) rather
+  // than mutating inside the updater, because the exclusivity spans two
+  // documents — the crossing-out of the other status can't be expressed as a
+  // single-doc delta. mergeCodeSets then reconciles each write against any
+  // concurrent context, unioning adds and honoring this flip's removals.
+  const applyToggle = useCallback(
+    (country, status) => {
       if (!country) return
-      setError('')
-      const { visited: nextVisited, wishlist: nextWishlist } = toggleCountryStatus(
-        latestVisitedRef.current,
-        latestWishlistRef.current,
+      setWriteError('')
+      const next = toggleCountryStatus(
+        toIsoSet(visitedDoc.value),
+        toIsoSet(wishlistDoc.value),
         country.iso3,
-        'visited',
+        status,
       )
-      latestVisitedRef.current = nextVisited
-      latestWishlistRef.current = nextWishlist
-      setVisited(nextVisited)
-      setWishlist(nextWishlist)
-      queueSave(country)
+      const nextVisited = Array.from(next.visited)
+      const nextWishlist = Array.from(next.wishlist)
+      // Surface a dead-letter rejection per document; a queued/offline write
+      // resolves (durability 'queued') and is NOT an error.
+      visitedDoc.update(() => nextVisited).catch(() => {
+        setWriteError(
+          `Couldn't save ${country.displayName} — the change was rejected. Try again.`,
+        )
+      })
+      wishlistDoc.update(() => nextWishlist).catch(() => {
+        setWriteError(
+          `Couldn't save ${country.displayName} — the change was rejected. Try again.`,
+        )
+      })
     },
-    [queueSave],
+    [visitedDoc, wishlistDoc],
   )
 
+  const toggleVisited = useCallback(
+    (country) => applyToggle(country, 'visited'),
+    [applyToggle],
+  )
   const toggleWishlist = useCallback(
-    (country) => {
-      if (!country) return
-      setError('')
-      const { visited: nextVisited, wishlist: nextWishlist } = toggleCountryStatus(
-        latestVisitedRef.current,
-        latestWishlistRef.current,
-        country.iso3,
-        'wishlist',
-      )
-      latestVisitedRef.current = nextVisited
-      latestWishlistRef.current = nextWishlist
-      setVisited(nextVisited)
-      setWishlist(nextWishlist)
-      queueSave(country)
-    },
-    [queueSave],
+    (country) => applyToggle(country, 'wishlist'),
+    [applyToggle],
   )
 
   // Tap on globe OR list row — select + open detail view. NEVER
@@ -3580,7 +3465,11 @@ export default function Atlas({ appId, token }) {
           {heroSaying ? <h1 className="cb-saying">{heroSaying}</h1> : null}
         </div>
         <div className="cb-header-meta">
-          <SyncPill online={online} hasRuntime={storage.hasRuntime()} />
+          <SyncPill
+            online={online}
+            hasRuntime={storage.hasRuntime()}
+            saving={visitedDoc.status === 'saving' || wishlistDoc.status === 'saving'}
+          />
           {/* The single source of progress now: a balanced "visited / total"
               chip (both numbers the same weight — see .cb-counter). The hero
               line is flavor; this is the number. */}
@@ -3603,9 +3492,9 @@ export default function Atlas({ appId, token }) {
         </div>
       ) : null}
 
-      {error ? (
+      {error || writeError ? (
         <div className="cb-error" role="alert" aria-live="polite">
-          {error}
+          {error || writeError}
         </div>
       ) : null}
 
