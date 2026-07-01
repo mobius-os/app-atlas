@@ -1,7 +1,7 @@
 {
   "id": "atlas",
   "name": "Atlas",
-  "version": "1.9.4",
+  "version": "1.9.5",
   "description": "Spin the globe, tap the countries you've visited, and watch your map fill in.",
   "author": "mobius-os",
   "license": "MIT",
@@ -34,5 +34,14 @@
     "esm_deps": [
       "d3-geo"
     ]
-  }
+  },
+  "source_files": [
+    "constants.js",
+    "theme.js",
+    "domain.js",
+    "storage.js",
+    "ui/Globe.jsx",
+    "ui/BottomSheet.jsx",
+    "ui/SyncPill.jsx"
+  ]
 }

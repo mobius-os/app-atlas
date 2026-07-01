@@ -1,0 +1,910 @@
+// ----------------------------------------------------------------- styles ---
+
+export const CSS = `
+/* mobius-ui:NativeTouch v1 — keep in sync; library candidate. Diverge below the marker only. */
+* { -webkit-tap-highlight-color: transparent; }
+.cb-sheet-handle, .cb-detail-cta, .cb-detail-close, .cb-sheet-search-clear, .cb-row {
+  touch-action: manipulation;
+}
+.cb-header, .cb-counter, .cb-pill, .cb-detail-flag, .cb-row-flag {
+  user-select: none; -webkit-user-select: none;
+}
+.cb-detail-close:active { transform: scale(0.94); }
+.cb-list { overscroll-behavior: contain; }
+.cb-detail-body { overscroll-behavior: contain; }
+.cb-sheet-search input { font-size: 16px; }
+@media (hover: hover) {
+  .cb-country:hover { fill: var(--cb-land-hover); }
+  .cb-row:hover {
+    background: color-mix(in srgb, var(--surface2, var(--surface)) 80%, transparent);
+  }
+  .cb-sheet-search-clear:hover { color: var(--text); }
+  .cb-detail-close:hover {
+    background: var(--surface2, var(--surface));
+    color: var(--text);
+  }
+}
+/* /mobius-ui:NativeTouch */
+
+/* mobius-ui:Focus v1 -- shared keyboard focus ring (WCAG 2.4.7); never bare outline:none */
+:where(button,a,input,textarea,select,summary,[role="button"],[tabindex]:not([tabindex="-1"])):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* /mobius-ui:Focus */
+
+/* mobius-ui:Root v1 — keep in sync; library candidate. Diverge below the marker only. */
+.cb-app {
+  /* mobius-ui:identity-palette — DELIBERATE divergence. The ocean blue is
+     an atlas-identity color the theme tokens can't express; it keeps a
+     stable atlas identity while mixing in the active theme background so
+     standalone installs and shell embeds do not feel like different apps.
+     Keep these hardcoded hex; everything else rides the theme tokens. */
+  --cb-ocean-1: color-mix(in srgb, #3f8cff 88%, var(--bg) 12%);
+  --cb-ocean-2: color-mix(in srgb, #1764c7 92%, var(--bg) 8%);
+  --cb-ocean-3: color-mix(in srgb, #0b2f73 94%, var(--bg) 6%);
+  /* /mobius-ui:identity-palette */
+  /* Specular shine — a soft highlight. Mixing with literal white
+     read OK on dark themes but flat-out vanished into the page on
+     light ones; mix toward --bg so the highlight sits one shade
+     lighter than the underlying surface in every theme. The
+     accent tint keeps the globe feeling planet-shaped rather
+     than just paler-than-its-frame. */
+  --cb-shine-1: color-mix(in srgb, #ffffff 38%, transparent);
+  --cb-shine-2: color-mix(in srgb, #ffffff 12%, transparent);
+  --cb-shine-3: transparent;
+  --cb-surface: color-mix(in srgb, var(--surface) 82%, transparent);
+  /* --surface2 isn't guaranteed by every Möbius theme; fall back
+     to --surface so the sheet stays solid on themes that don't
+     define the deeper surface token. */
+  --cb-surface-strong: color-mix(in srgb, var(--surface2, var(--surface)) 92%, transparent);
+  --cb-border: var(--border);
+  --cb-land-fill: color-mix(in srgb, #d7c49a 72%, var(--surface) 28%);
+  --cb-land-hover: color-mix(in srgb, #e5d4aa 78%, var(--text) 22%);
+  --cb-land-stroke: color-mix(in srgb, #24333b 74%, var(--bg) 26%);
+  /* Visited rides the theme's semantic --green (falls back to a stable
+     green on themes that don't define it) so "visited" tracks per-theme
+     accent shifts instead of pinning one hardcoded hue. */
+  --cb-visited-base: var(--green, #27ae60);
+  --cb-visited-fill: color-mix(in srgb, var(--cb-visited-base) 88%, var(--cb-land-fill) 12%);
+  --cb-visited-stroke: color-mix(in srgb, #d9ffe7 72%, var(--bg) 28%);
+  --cb-wishlist: color-mix(in srgb, #f39c12 88%, var(--cb-land-fill) 12%);
+  --cb-wishlist-fill: color-mix(in srgb, var(--cb-wishlist) 82%, var(--cb-land-fill) 18%);
+  /* Selected fill: the theme accent brightened with literal white — NOT
+     --text, which flips dark on light themes and would read as shadow
+     instead of highlight. The white lift keeps it clearly lighter than
+     the visited green even on themes whose accent is itself green. */
+  --cb-selected-fill: color-mix(in srgb, var(--accent) 72%, #ffffff 28%);
+  --cb-active-cta-text: #101820;
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  /* App-root/page background is the plain theme token, matching every other
+     Möbius app. The accent radial-gradient that used to sit here tinted the
+     whole page; the globe carries its own scene (ocean gradient, accent halo)
+     so the planet still reads as a planet without painting the chrome. */
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  overflow: hidden;
+}
+
+.cb-error {
+  margin: 0 18px 8px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text);
+  border: 1px solid var(--cb-border);
+  font-size: 13px;
+}
+.cb-banner {
+  margin: 0 18px 8px;
+  padding: 8px 14px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  border: 1px solid var(--cb-border);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+/* /mobius-ui:Root */
+
+/* mobius-ui:Header v1 — keep in sync; library candidate. Diverge below the marker only. */
+.cb-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  /* Top-pinned bar: clear the notch / status bar on phones. */
+  padding: max(14px, env(safe-area-inset-top)) 18px 8px;
+  flex-shrink: 0;
+}
+.cb-header h1 {
+  margin: 0;
+  font-size: 18px;
+  letter-spacing: 0.01em;
+  color: var(--text);
+  min-width: 0;
+  line-height: 1.15;
+}
+/* Rotating hero saying — flavor text, not a headline shout. Slightly softer
+   weight/size than a title and truncated to one line so a longer phrase can't
+   wrap into the meta chips. */
+.cb-saying {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Brand mark: the app's real glossy icon, no name text. The changing
+   sentence ("12 stamps on the map.") sits beside it as status, not
+   identity. */
+.cb-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.cb-brand-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex-shrink: 0;
+  display: block;
+}
+.cb-brand-fallback {
+  width: 34px;
+  height: 34px;
+  border-radius: 6px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent, currentColor);
+  color: var(--bg, #0c0c0c);
+  font-weight: 700;
+  line-height: 1;
+}
+.cb-header-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+@media (min-height: 760px) {
+  .cb-header h1 { font-size: 20px; }
+}
+/* Wide screen: the bottom sheet doesn't really make sense, but
+   since this is mobile-first we keep the layout consistent and
+   just let the sheet sit at the bottom. The globe gets a bit of
+   breathing room. */
+@media (min-width: 720px) {
+  .cb-header {
+    padding: max(18px, env(safe-area-inset-top)) 24px 10px;
+  }
+}
+@media (max-width: 430px) {
+  .cb-header {
+    align-items: center;
+    padding: max(12px, env(safe-area-inset-top)) 14px 8px;
+  }
+  .cb-header h1 {
+    font-size: 16px;
+  }
+  .cb-counter {
+    padding: 5px 9px;
+  }
+}
+/* /mobius-ui:Header */
+
+/* mobius-ui:SyncPill v1 — keep in sync; library candidate. Diverge below the marker only. */
+.cb-counter {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--cb-surface) 88%, var(--bg) 12%);
+  border: 1px solid var(--cb-border);
+  /* Derived stats render in --mono to match how sibling apps set
+     numeric/metadata chips. */
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  transition: opacity 200ms ease;
+}
+.cb-counter--faded {
+  /* When we boot offline with no cached GeoJSON, the totals are
+     unknown — fade the counter so the user doesn't read a
+     confidently-stated "0 / …" as fact. */
+  opacity: 0.55;
+}
+/* Balanced counter (Change 3): the visited count and the total now read at
+   the SAME size and weight — the old design set 54 at 18px accent and /195 at
+   13px muted, which made the pair look lopsided. Only color separates them
+   (the current count picks up the accent; the divider + total sit in muted),
+   so "54 / 195" reads as one tidy, even fraction. */
+.cb-counter-now {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.cb-counter-sep,
+.cb-counter-total {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--muted);
+}
+/* Sync pill — sits next to the counter; hidden when synced + online
+   (the common case). When pending > 0 or offline, the pill softly
+   announces what state the user's writes are in. */
+.cb-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  /* Metadata chip: --mono + tabular-nums so the pending count reads as a
+     derived stat, matching sibling apps. */
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  border: 1px solid var(--cb-border);
+  background: var(--cb-surface);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.cb-pill-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.cb-pill--offline .cb-pill-dot {
+  background: color-mix(in srgb, var(--text) 50%, transparent);
+}
+/* Saving — a transient online state while a durable write is in flight. The
+   accent dot reads as "working", distinct from the muted offline dot. */
+.cb-pill--saving {
+  color: var(--accent);
+}
+.cb-pill--saving .cb-pill-dot {
+  background: var(--accent);
+}
+/* /mobius-ui:SyncPill */
+
+/* mobius-ui:Globe v1 — keep in sync; library candidate. Diverge below the marker only. */
+.cb-globe-shell {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+}
+.cb-globe-canvas {
+  position: absolute;
+  inset: 0;
+  /* touch-action:none on the container div prevents the shell zoom-lock
+     from eating pinch gestures before the SVG's own touchAction:none
+     takes effect — important during the first render frame. */
+  touch-action: none;
+}
+.cb-globe-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+/* Suppress the outline only for mouse/touch focus; the shared Focus
+   block below still paints a ring for keyboard (:focus-visible) users. */
+.cb-globe-svg:focus:not(:focus-visible) {
+  outline: none;
+}
+.cb-globe-svg g[role='button']:focus:not(:focus-visible) {
+  outline: none;
+}
+/* The focused country may sit near or behind the limb where a thin
+   stroke is easy to miss — pair a thick accent stroke with a
+   non-scaling accent halo so keyboard focus is unmistakable. */
+.cb-globe-svg g[role='button']:focus-visible {
+  outline: none;
+}
+.cb-globe-svg g[role='button']:focus-visible .cb-country {
+  stroke: var(--accent);
+  stroke-width: 2.2;
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--accent) 70%, transparent));
+}
+.cb-globe-loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 14px;
+  text-align: center;
+  padding: 0 24px;
+}
+.cb-globe-loading--offline {
+  /* Sticks slightly above center so it doesn't overlap the bottom
+     sheet's grip on short viewports. */
+  align-items: start;
+  padding-top: 28%;
+}
+.cb-country {
+  fill: var(--cb-land-fill);
+  stroke: var(--cb-land-stroke);
+  stroke-width: 0.62;
+  opacity: 1;
+  transition: fill 180ms ease, stroke 180ms ease, opacity 180ms ease;
+  cursor: pointer;
+}
+.cb-country--visited {
+  fill: var(--cb-visited-fill);
+  /* Stroke previously mixed accent with literal "white", which
+     vanished the outline on light themes. Mix with --bg so the
+     border keeps separation from the ocean in every theme. */
+  stroke: var(--cb-visited-stroke);
+  stroke-width: 0.74;
+}
+.cb-country--wishlist {
+  fill: var(--cb-wishlist-fill);
+  stroke: color-mix(in srgb, var(--cb-wishlist) 70%, var(--bg) 30%);
+  stroke-width: 0.74;
+}
+.cb-country--selected {
+  /* Selection highlights the TERRITORY, never its boundary. A stroke-based
+     highlight can't work here: each country is one path, but countries
+     paint in document order, so a neighbor drawn later overpaints the half
+     of the selection stroke that falls on its side of a shared border (and
+     redraws its own dark stroke on top) — the white outline showed up
+     broken wherever the selected country touched land. A fill can't be
+     overpainted (polygons tile), and because the whole MultiPolygon is one
+     path keyed by iso3 the fill covers every island and exclave too.
+     The country keeps its normal boundary stroke (land/visited/wishlist);
+     only the fill changes — flat, no glow (owner feedback: drop-shadows
+     read as smudge, and the accent+white fill is unambiguous on its own).
+     Overrides visited/wishlist fill so the selection is always clear —
+     the CTA state in the detail panel shows the status instead. */
+  fill: var(--cb-selected-fill);
+}
+/* Status filter mirror — countries outside the active filter fade back so
+   the matching set reads at a glance. Opacity (not a fill swap) keeps the
+   visited/wishlist hue legible through the fade, and the dimmed paths stay
+   tappable so the user can still select and mark them. */
+.cb-country--dimmed {
+  opacity: 0.3;
+}
+/* /mobius-ui:Globe */
+
+/* mobius-ui:Sheet v1 — keep in sync; library candidate. Diverge below the marker only. */
+.cb-sheet {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--cb-surface-strong);
+  backdrop-filter: blur(14px);
+  border-top: 1px solid var(--cb-border);
+  border-radius: 22px 22px 0 0;
+  /* Neutral elevation shadow — same in light + dark themes; the
+     color-mix tint comes from the surface underneath. */
+  box-shadow: 0 -10px 30px color-mix(in srgb, var(--text) 18%, transparent);
+  /* Snap animations only — drag updates set the dragging class
+     which disables the transition so the sheet tracks the finger
+     without a perceived lag. */
+  transition: height 220ms cubic-bezier(.22,1,.36,1);
+  overflow: hidden;
+  /* min-height previously used vh which conflicted with the
+     percent-of-cb-app inline height during keyboard-up; drop
+     the min entirely — SHEET_MIN (0.30) already enforces the
+     floor in code. */
+}
+.cb-sheet--dragging {
+  transition: none;
+}
+.cb-sheet-handle {
+  /* Subtle grab affordance, not a band. The visible row is short (26px)
+     to give the list back ~18px of vertical space (owner: the handle ate
+     too much). The hit area stays finger-friendly because the handle's
+     own padding plus the rounded sheet lip above it read as one target;
+     the grip is centred in the 26px row. */
+  flex-shrink: 0;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  touch-action: none;
+  cursor: ns-resize;
+}
+/* The handle is keyboard-operable (role=separator, tabindex 0, arrow-key
+   resize). Inset the shared focus ring so it reads inside the short 26px row
+   instead of bleeding into the list/globe above and below. */
+.cb-sheet-handle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
+  border-radius: 8px;
+}
+@media (hover: hover) {
+  .cb-sheet-handle:hover .cb-sheet-grip {
+    background: color-mix(in srgb, var(--text) 36%, transparent);
+  }
+}
+.cb-sheet-grip {
+  width: 34px;
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 20%, transparent);
+}
+.cb-sheet-search {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: var(--cb-surface);
+  border: 1px solid var(--cb-border);
+  color: var(--muted);
+}
+.cb-sheet-search-icon {
+  flex-shrink: 0;
+  display: block;
+  color: var(--muted);
+}
+.cb-sheet-search input {
+  /* width:100% + box-sizing keeps the field a constant width as the user
+     types — flex:1 alone let WebKit's intrinsic input sizing nudge the pill
+     wider/narrower per character, so the search box visibly reflowed. */
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  font: inherit;
+  /* Drop the native search affordance: type="search" paints WebKit's own
+     ::-webkit-search-cancel-button, which doubled up with the app's custom
+     clear button (two × glyphs). appearance:none removes the styled control
+     so only the app's button shows. */
+  appearance: none;
+  -webkit-appearance: none;
+}
+/* Belt-and-braces: some WebKit builds still draw the cancel button even with
+   appearance:none on the input, so hide the pseudo-element outright. */
+.cb-sheet-search input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
+.cb-sheet-search input::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
+/* Keep the borderless look for mouse focus; the shared Focus block
+   still paints a keyboard ring on :focus-visible. */
+.cb-sheet-search input:focus:not(:focus-visible) {
+  outline: 0;
+}
+.cb-sheet-search input::placeholder {
+  color: var(--muted);
+}
+.cb-sheet-search-clear {
+  /* 44px hit target (WCAG 2.5.8); the visible glyph stays small because the
+     button centres it. Was 28px — below the 44px floor for a touch target. */
+  flex-shrink: 0;
+  min-width: 44px;
+  min-height: 44px;
+  /* The search pill is ~44px tall, so a 44px button fits without negative
+     margin; pull it 6px into the pill's right padding so it sits flush. */
+  margin: 0 -6px 0 0;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  border: 0;
+  cursor: pointer;
+}
+/* /mobius-ui:Sheet */
+
+/* Search + status-filter row above the list. The search pill flexes to
+   fill; the chips keep fixed 44px touch targets. */
+.cb-sheet-controls {
+  flex-shrink: 0;
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  margin: 4px 14px 10px;
+}
+.cb-filters {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+}
+.cb-filter {
+  width: 44px;
+  min-height: 44px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 14px;
+  border: 1px solid var(--cb-border);
+  background: var(--cb-surface);
+  color: var(--muted);
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: background 160ms ease, color 160ms ease, border-color 160ms ease;
+}
+.cb-filter:active {
+  transform: scale(0.94);
+}
+.cb-filter.is-on {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  color: var(--accent);
+}
+@media (hover: hover) {
+  .cb-filter:hover { color: var(--text); }
+  .cb-filter.is-on:hover { color: var(--accent); }
+}
+
+/* mobius-ui:Card v1 — keep in sync; library candidate. Diverge below the marker only. */
+/* Detail panel and list panel sit in the same flex slot. Exactly one
+   is visible at a time; the other is display:none so it takes no space
+   but stays mounted — this is the mechanism that preserves scrollTop on
+   the list without any JS save/restore logic. */
+.cb-detail--hidden,
+.cb-list-panel--hidden {
+  display: none !important;
+}
+.cb-list-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+/* Detail view — shown while a country is selected. Three bands: a fixed
+   condensed header, a single scrollable body, and a pinned action bar. The
+   detail itself does NOT scroll (only .cb-detail-body does), so the header and
+   CTAs never leave the screen and nothing clips at any sheet height. Kept
+   mounted at all times so toggling back to the list never resets scrollTop. */
+.cb-detail {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden; /* the body scrolls, not the shell */
+}
+/* Condensed header — pinned at the top of the detail. A hairline divider sets
+   it off from the scrolling facts; the negative-free padding keeps the flag,
+   name and close on one tidy 56px-ish row that survives the shortest sheet. */
+.cb-detail-head {
+  flex-shrink: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 16px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--cb-border) 70%, transparent);
+}
+.cb-detail-flag {
+  /* Smaller than the old 40px block: the header is a label now, not a hero, so
+     the facts below get the room. */
+  font-size: 30px;
+  line-height: 1;
+}
+.cb-detail-name {
+  min-width: 0; /* let the name ellipsize instead of pushing the close button off */
+}
+.cb-detail-name strong {
+  display: block;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cb-detail-name small {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The one scrolling region. Sits between the fixed header and the pinned
+   action bar; only this band overflows, so the facts can grow without
+   clipping and without dragging the CTAs off-screen. */
+.cb-detail-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 16px;
+}
+/* Basic-info card (Change 6) — a definition list of capital / population /
+   surface area / languages. Label muted, value in --text; rows separated by a
+   hairline so the four facts read as a tidy table without heavy borders. */
+.cb-info {
+  margin: 0;
+  /* Don't let the flex body squeeze the facts card: when the sheet is dragged
+     very short the body must scroll, not crush the card to a sliver. shrink:0
+     keeps the card at its natural height so .cb-detail-body overflows (and
+     scrolls) instead of clipping the rows. */
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--cb-border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 50%, transparent);
+  overflow: hidden;
+}
+.cb-info-row {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 14px;
+  padding: 10px 14px;
+}
+.cb-info-row + .cb-info-row {
+  border-top: 1px solid color-mix(in srgb, var(--cb-border) 60%, transparent);
+}
+.cb-info-row dt {
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+.cb-info-row dd {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+  text-align: right;
+  /* Numeric facts (population/area) align as derived stats, matching the
+     counter chip's tabular treatment. */
+  font-variant-numeric: tabular-nums;
+  word-break: break-word;
+}
+.cb-detail-close {
+  min-width: 44px;
+  min-height: 44px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface2, var(--surface)) 80%, transparent);
+  color: var(--muted);
+  border: 1px solid var(--cb-border);
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease, transform 120ms ease;
+}
+.cb-detail-cta {
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 14px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  background: color-mix(in srgb, var(--surface2, var(--surface)) 88%, transparent);
+  color: var(--text);
+  border: 1px solid var(--cb-border);
+  cursor: pointer;
+  transition: transform 120ms ease, background 160ms ease, color 160ms ease;
+}
+/* Pinned action bar — flex-shrink:0 keeps it on-screen while the facts scroll.
+   The top divider + surface tint read it as a footer; the safe-area inset (now
+   that the shell dropped its own padding) keeps the CTAs clear of the home
+   indicator on notched phones. */
+.cb-detail-actions {
+  flex-shrink: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  padding: 12px 16px max(14px, env(safe-area-inset-bottom));
+  border-top: 1px solid color-mix(in srgb, var(--cb-border) 70%, transparent);
+  background: color-mix(in srgb, var(--cb-surface-strong) 70%, transparent);
+}
+.cb-detail-cta:active {
+  transform: scale(0.985);
+}
+.cb-detail-cta--visited.is-on {
+  background: var(--cb-visited-fill);
+  color: var(--cb-active-cta-text);
+  border-color: var(--cb-visited-fill);
+}
+.cb-detail-cta--wishlist.is-on {
+  background: var(--cb-wishlist);
+  color: var(--cb-active-cta-text);
+  border-color: var(--cb-wishlist);
+}
+.cb-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* Bottom-most surface: keep the last row clear of the home
+     indicator / gesture bar on notched phones. */
+  padding: 0 12px max(18px, env(safe-area-inset-bottom));
+  -webkit-overflow-scrolling: touch;
+}
+.cb-list-empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 14px;
+}
+.cb-row {
+  /* Min-height enforces a 44px tap target without needing to
+     pad the row visually — the grid keeps content centred. */
+  width: 100%;
+  min-height: 56px;
+  display: grid;
+  grid-template-columns: 30px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  margin-bottom: 6px;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 60%, transparent);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 160ms ease, border-color 160ms ease, transform 120ms ease;
+}
+.cb-row:active {
+  transform: scale(0.995);
+}
+.cb-row-flag {
+  font-size: 22px;
+  line-height: 1;
+}
+.cb-row-text strong {
+  display: block;
+  font-size: 15px;
+  font-weight: 600;
+}
+.cb-row-text small {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+/* Two one-tap toggles per row, side by side (Change 5): the star =
+   'Want to go', the ring = 'Been'. The group is the row's third grid column. */
+.cb-row-marks {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+/* 'Want to go' star toggle — wishlist orange when on, hollow when off.
+   Same 40px hit target as the visited ring so the two read as a pair. */
+.cb-row-want {
+  /* 44px hit target (WCAG 2.5.8). The 56px row absorbs the extra height via the
+     negative vertical margin, so the row stays the same size; only the tap
+     surface grows. Was 40px — under the 44px floor. */
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  margin: -10px -2px -10px 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  font-size: 20px;
+  line-height: 1;
+  color: color-mix(in srgb, var(--muted) 80%, transparent);
+  transition: color 0.12s, transform 0.08s;
+}
+.cb-row-want--on {
+  color: var(--cb-wishlist);
+}
+.cb-row-want:active { transform: scale(0.88); }
+@media (hover: hover) {
+  .cb-row-want:hover { color: var(--cb-wishlist); }
+}
+/* One-tap visited toggle on each list row: mark a country without opening
+   its detail (tap stops propagation). 40px hit target around a 26px ring;
+   fills accent with a check when visited. The owner's core flow is bulk-
+   marking 195 countries, so this turns "row → detail → mark → back" into a
+   single tap. */
+.cb-row-mark {
+  /* 44px hit target (WCAG 2.5.8). Negative vertical margin keeps the 56px row
+     unchanged; only the tap surface grows. Was 40px — under the 44px floor. */
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  margin: -10px -4px -10px 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  color: var(--cb-visited-fill, var(--accent));
+}
+.cb-row-mark > span {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  line-height: 1;
+  transition: background 0.12s, border-color 0.12s, transform 0.08s;
+}
+.cb-row-mark--on > span {
+  background: var(--cb-visited-fill, var(--accent));
+  border-color: var(--cb-visited-fill, var(--accent));
+  color: var(--bg);
+}
+.cb-row-mark:active > span { transform: scale(0.88); }
+@media (hover: hover) {
+  .cb-row-mark:hover > span { border-color: var(--cb-visited-fill, var(--accent)); }
+}
+.cb-row--visited .cb-row-text strong {
+  color: var(--cb-visited-fill);
+}
+.cb-row--wishlist {
+  border-color: color-mix(in srgb, var(--cb-wishlist) 22%, transparent);
+  background: color-mix(in srgb, var(--cb-wishlist) 8%, var(--surface));
+}
+.cb-row--wishlist .cb-row-text strong {
+  color: var(--cb-wishlist);
+}
+/* /mobius-ui:Card */
+
+/* mobius-ui:Scrollskin v1 — keep in sync; library candidate. Slim
+   token-colored scrollbar so desktop/web doesn't fall back to the raw
+   OS default the mobile-first layout otherwise shows on wide screens. */
+.cb-list, .cb-detail-body {
+  scrollbar-width: thin;
+  scrollbar-color: var(--cb-border) transparent;
+}
+.cb-list::-webkit-scrollbar, .cb-detail-body::-webkit-scrollbar {
+  width: 9px;
+}
+.cb-list::-webkit-scrollbar-track, .cb-detail-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+.cb-list::-webkit-scrollbar-thumb, .cb-detail-body::-webkit-scrollbar-thumb {
+  background: var(--cb-border);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+/* /mobius-ui:Scrollskin */
+
+/* mobius-ui:ReducedMotion v1 -- honor the OS reduce-motion setting */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+/* /mobius-ui:ReducedMotion */
+`

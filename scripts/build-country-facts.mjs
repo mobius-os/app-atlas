@@ -23,10 +23,10 @@
 // country-facts.json is committed as the human-readable regeneration source,
 // but Möbius mini-apps compile to a SINGLE file at install (esbuild on
 // index.jsx alone — sibling imports don't resolve), so the LIVE data must be
-// inlined in index.jsx. This script therefore also rewrites the
+// inlined in constants.js. This script therefore also rewrites the
 // `const COUNTRY_FACTS = {...}` between the COUNTRY_FACTS:BEGIN/END markers in
-// index.jsx, keeping the app single-file and the const in lockstep with the
-// JSON. Edit the data here, never by hand in index.jsx.
+// constants.js, keeping the app bundle and the const in lockstep with the
+// JSON. Edit the data here, never by hand in constants.js.
 
 import { readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -123,17 +123,16 @@ const out = join(repoRoot, 'country-facts.json')
 writeFileSync(out, json)
 console.log(`Wrote ${out} — ${Object.keys(facts).length} countries, ${bytes} bytes`)
 
-// Inline the same data into index.jsx between the markers so the app stays
-// single-file (the install compile can't resolve a sibling ./country-facts.json
-// import). Fail loudly if the markers are missing rather than silently leaving
-// index.jsx stale.
-const indexPath = join(repoRoot, 'index.jsx')
-const indexSrc = readFileSync(indexPath, 'utf8')
-const markerRe = /(\/\/ COUNTRY_FACTS:BEGIN[^\n]*\n)const COUNTRY_FACTS = [\s\S]*?(\n\/\/ COUNTRY_FACTS:END)/
-if (!markerRe.test(indexSrc)) {
-  console.error('index.jsx is missing the COUNTRY_FACTS:BEGIN/END markers — cannot inline.')
+// Inline the same data into constants.js between the markers so the bundled app
+// keeps the generated facts in source_files. Fail loudly if the markers are
+// missing rather than silently leaving constants.js stale.
+const constantsPath = join(repoRoot, 'constants.js')
+const constantsSrc = readFileSync(constantsPath, 'utf8')
+const markerRe = /(\/\/ COUNTRY_FACTS:BEGIN[^\n]*\n)export const COUNTRY_FACTS = [\s\S]*?(\n\/\/ COUNTRY_FACTS:END)/
+if (!markerRe.test(constantsSrc)) {
+  console.error('constants.js is missing the COUNTRY_FACTS:BEGIN/END markers — cannot inline.')
   process.exit(1)
 }
-const nextIndex = indexSrc.replace(markerRe, `$1const COUNTRY_FACTS = ${json}$2`)
-writeFileSync(indexPath, nextIndex)
-console.log(`Inlined COUNTRY_FACTS into ${indexPath}`)
+const nextConstants = constantsSrc.replace(markerRe, `$1export const COUNTRY_FACTS = ${json}$2`)
+writeFileSync(constantsPath, nextConstants)
+console.log(`Inlined COUNTRY_FACTS into ${constantsPath}`)
