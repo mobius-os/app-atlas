@@ -208,6 +208,36 @@ export function Globe({
     return () => observer.disconnect()
   }, [])
 
+  // Native touch guard — the reason a real device wouldn't spin/zoom.
+  // `touch-action: none` is set on the SVG (and its container), but WebKit/iOS
+  // does NOT reliably honor touch-action on an <svg> element (long-standing
+  // engine gap): the browser claims a one-finger drag as a page-pan and a two-
+  // finger gesture as a page-zoom BEFORE the pointer stream reaches the drag/
+  // pinch handlers — so on device the globe reads as dead (drag) or half-alive
+  // (pinch fighting the browser zoom), even though the pointer logic itself is
+  // correct. React's onTouch* handlers are registered passive and cannot
+  // preventDefault, so the declarative touch-action guard is all we'd otherwise
+  // have. Attach a NON-PASSIVE touchmove listener and cancel the browser's
+  // default gesture directly. Pointer events are unaffected by this (they are
+  // not the prevented "compatibility" events), so drag/pinch keep receiving a
+  // clean stream. touchstart is deliberately left alone: a stationary tap must
+  // still fire the country/ocean onClick — only a MOVE (drag or pinch) is
+  // cancelled. Bound to the always-present container div so it survives the
+  // loading/error inner-content swaps.
+  useEffect(() => {
+    const node = containerRef.current
+    if (!node || typeof node.addEventListener !== 'function') return undefined
+    const onTouchMove = (event) => {
+      // Only cancel multi-touch or an actual drag; a single motionless touch
+      // never reaches here (touchmove only fires once the finger moves), so
+      // this preventDefault targets exactly the gestures the browser would
+      // otherwise steal.
+      if (event.cancelable) event.preventDefault()
+    }
+    node.addEventListener('touchmove', onTouchMove, { passive: false })
+    return () => node.removeEventListener('touchmove', onTouchMove)
+  }, [])
+
   // Cancel a pending coalesced frame — called on pointerdown (so a fresh grab
   // doesn't flush a stale frame) and on unmount.
   const cancelRotationFrame = useCallback(() => {
@@ -672,14 +702,32 @@ export function Globe({
   }
   const onPointerUp = (event) => finishDrag(event)
   const onPointerCancel = (event) => finishDrag(event)
-  // Route pointer-leave through finishDrag so we always release capture
-  // and clear the moved flag — earlier this just flipped active=false
-  // and left the moved flag dangling, which could swallow the next tap.
-  const onPointerLeave = (event) => finishDrag(event)
+  // pointerleave must NOT end an in-progress drag. On iOS Safari, a
+  // pointer-captured touch-drag STILL fires spurious pointerleave every frame
+  // as the globe re-renders (the country paths under the finger rebuild their
+  // `d` each frame and the hit-target churns), and routing every leave through
+  // finishDrag aborted the drag ~7×/swipe — the on-device diagnostic showed 139
+  // finishes vs 19 real gestures, so 494 pointermoves produced only 13 solved
+  // rotations. That IS the "one finger does nothing" bug: the drag dies a few
+  // pixels in, over and over. While the pointer is still down it lives in
+  // pointersRef, so ignore leave for a tracked pointer; the real end still
+  // arrives via pointerup / pointercancel (and lostpointercapture below). A
+  // genuine leave-while-up (mouse exits the SVG with no button) is unaffected —
+  // that pointer isn't in the map.
+  const onPointerLeave = (event) => {
+    if (pointersRef.current.has(event.pointerId)) return
+    finishDrag(event)
+  }
   // Some browsers fire lostpointercapture without a paired pointerup
   // (e.g. iOS Safari when a modal overlays mid-drag). Treat that as a
-  // drag finish so we don't get stuck with dragRef.active=true.
-  const onLostPointerCapture = (event) => finishDrag(event)
+  // drag finish so we don't get stuck with dragRef.active=true — but, like
+  // leave above, only when the pointer is no longer down. Losing capture while
+  // the finger is still tracked would otherwise abort a live drag; if capture is
+  // truly gone the subsequent pointerup still finalizes it.
+  const onLostPointerCapture = (event) => {
+    if (pointersRef.current.has(event.pointerId)) return
+    finishDrag(event)
+  }
 
   // Wheel / trackpad zoom on desktop. Exponential in deltaY so each notch is
   // a constant proportional change (and the clamp behaves the same near both
