@@ -448,6 +448,31 @@ export function filterCountriesByStatus(countries, filter, visitedValues = new S
   return countries
 }
 
+// Describe the Reflection signal a status toggle should emit, given the
+// country's CURRENT (pre-tap) membership and the status the user tapped. Pure
+// so the created / deleted / updated decision is unit-testable without a signal
+// sink; the component performs the actual window.mobius.signal() call. Returns:
+//   { event:'item_created', type }              — status added from absent
+//   { event:'item_deleted', type }              — existing status toggled off
+//   { event:'item_updated', type, from, to }    — moved between visited/wishlist
+// or null for an unrecognized status (never happens for a real tap). `type` is
+// a domain noun ('visited_country' / 'wishlist_country'); a cross-status move
+// carries flat from/to strings. wasVisited/wasWishlist must be mutually
+// exclusive (visited wins) — the same exclusivity the render sets enforce.
+export function classifyStatusToggle(wasVisited, wasWishlist, status) {
+  if (status === 'visited') {
+    if (wasVisited) return { event: 'item_deleted', type: 'visited_country' }
+    if (wasWishlist) return { event: 'item_updated', type: 'country', from: 'wishlist', to: 'visited' }
+    return { event: 'item_created', type: 'visited_country' }
+  }
+  if (status === 'wishlist') {
+    if (wasWishlist) return { event: 'item_deleted', type: 'wishlist_country' }
+    if (wasVisited) return { event: 'item_updated', type: 'country', from: 'visited', to: 'wishlist' }
+    return { event: 'item_created', type: 'wishlist_country' }
+  }
+  return null
+}
+
 export function toggleCountryStatus(visitedValues, wishlistValues, iso3, status) {
   const visitedSet = toIsoSet(visitedValues)
   const wishlistSet = toIsoSet(wishlistValues)

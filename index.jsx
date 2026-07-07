@@ -26,6 +26,7 @@ import {
 } from './storage.js'
 import {
   STATUS_FILTERS,
+  classifyStatusToggle,
   dedupeCountries,
   filterCountriesByStatus,
   mergeCodeSets,
@@ -40,6 +41,16 @@ import { Globe } from './ui/Globe.jsx'
 import { BottomSheet } from './ui/BottomSheet.jsx'
 import { SyncPill } from './ui/SyncPill.jsx'
 import { CSS } from './theme.js'
+
+// Fire-and-forget Reflection analytics. The optional chaining guards a missing
+// runtime (tests, fallback host) so this is a silent no-op there; window.mobius
+// .signal is itself documented as never-throwing. Payloads are always flat
+// primitives, no PII (see each call site). This is the ONE analytics seam —
+// keep every signal going through it so the guard and shape stay consistent.
+function emitSignal(name, payload) {
+  if (typeof window === 'undefined') return
+  window.mobius?.signal?.(name, payload)
+}
 
 export { bindUseDocument } from './storage.js'
 export {
@@ -168,6 +179,7 @@ export default function Atlas({ appId, token }) {
         // Online but we got nothing — flag a real error so the user knows
         // to try again instead of staring at an empty globe.
         setError('Could not load the world right now. Try again in a moment.')
+        emitSignal('error', { message: 'world geometry loaded empty', source: 'boot' })
       } else {
         setError('')
       }
@@ -175,6 +187,7 @@ export default function Atlas({ appId, token }) {
       // eslint-disable-next-line no-console
       console.error('Atlas:boot failed', err)
       setError('Could not load the world right now. Try again in a moment.')
+      emitSignal('error', { message: String(err?.message || err), source: 'boot' })
     } finally {
       setLoading(false)
       bootInFlightRef.current = false
@@ -213,6 +226,23 @@ export default function Atlas({ appId, token }) {
     return () => window.removeEventListener('online', onOnline)
   }, [boot, countries.length])
 
+  // app_ready (Reflection) — fire ONCE, after boot has loaded the geometry and
+  // both code docs have left 'loading' (a usable value, from cache or server).
+  // This distinguishes a real Atlas open from a bare iframe load and reports
+  // whether the app is empty or actively used. All-primitive payload, no PII.
+  const appReadyFiredRef = useRef(false)
+  useEffect(() => {
+    if (appReadyFiredRef.current) return
+    if (loading) return
+    if (visitedDoc.status === 'loading' || wishlistDoc.status === 'loading') return
+    appReadyFiredRef.current = true
+    emitSignal('app_ready', {
+      item_count: countries.length,
+      visited_count: visited.size,
+      wishlist_count: wishlist.size,
+    })
+  }, [loading, visitedDoc.status, wishlistDoc.status, countries.length, visited.size, wishlist.size])
+
   // ----- derived list (ordered, then narrowed) --------------------------
   // Order is alphabetical and never depends on marking — see
   // orderCountriesForList. The status filter narrows; it doesn't re-sort.
@@ -226,8 +256,13 @@ export default function Atlas({ appId, token }) {
       if (!STATUS_FILTERS.includes(next)) return
       setStatusFilter(next)
       prefWrite(appId, 'status-filter', next)
+      // filter_changed (Reflection) — result_count is the size of the list the
+      // new filter yields, so an unused or always-zero-result filter is visible.
+      const ordered = orderCountriesForList(countries, query)
+      const resultCount = filterCountriesByStatus(ordered, next, visited, wishlist).length
+      emitSignal('filter_changed', { filter: next, result_count: resultCount })
     },
-    [appId],
+    [appId, countries, query, visited, wishlist],
   )
 
   // Surface a durable-write failure. doc.update REJECTS on a dead-letter (a
@@ -435,25 +470,38 @@ export default function Atlas({ appId, token }) {
     (country, status) => {
       if (!country) return
       setWriteError('')
-      const next = toggleCountryStatus(
-        toIsoSet(visitedDoc.value),
-        toIsoSet(wishlistDoc.value),
-        country.iso3,
-        status,
-      )
+      const beforeVisited = toIsoSet(visitedDoc.value)
+      const beforeWishlist = toIsoSet(wishlistDoc.value)
+      // Membership BEFORE the tap, visited winning (the render exclusivity), so
+      // the create/delete/update classification matches what the user saw.
+      const wasVisited = beforeVisited.has(country.iso3)
+      const wasWishlist = !wasVisited && beforeWishlist.has(country.iso3)
+      const next = toggleCountryStatus(beforeVisited, beforeWishlist, country.iso3, status)
       const nextVisited = Array.from(next.visited)
       const nextWishlist = Array.from(next.wishlist)
+
+      // item_created / item_deleted / item_updated (Reflection) — one flat
+      // signal for the status change so Reflection can tell travel history from
+      // trip planning and see cross-status moves. Codes/status names only, no PII.
+      const change = classifyStatusToggle(wasVisited, wasWishlist, status)
+      if (change) {
+        const { event, ...payload } = change
+        emitSignal(event, payload)
+      }
+
       // Surface a dead-letter rejection per document; a queued/offline write
       // resolves (durability 'queued') and is NOT an error.
       visitedDoc.update(() => nextVisited).catch(() => {
         setWriteError(
           `Couldn't save ${country.displayName} — the change was rejected. Try again.`,
         )
+        emitSignal('error', { message: 'visited write rejected (dead-letter)', source: 'visited_write' })
       })
       wishlistDoc.update(() => nextWishlist).catch(() => {
         setWriteError(
           `Couldn't save ${country.displayName} — the change was rejected. Try again.`,
         )
+        emitSignal('error', { message: 'wishlist write rejected (dead-letter)', source: 'wishlist_write' })
       })
     },
     [visitedDoc, wishlistDoc],
@@ -476,9 +524,30 @@ export default function Atlas({ appId, token }) {
       if (!country) return
       setSelectedIso3(country.iso3)
       navPush()
+      // item_opened (Reflection) — frequent opens without status changes hint at
+      // browsing/planning UX rather than checklist entry. Flat payload, no PII.
+      emitSignal('item_opened', { type: 'country' })
     },
     [navPush],
   )
+
+  // geometry_repaired (Reflection) — the globe repairs corrupt seed geometry
+  // (rewinds inverted features, drops impossible sub-polygons) once d3-geo is
+  // loaded. The repair happens inside Globe (that is where d3 lives, so the plan
+  // 's "emit from boot" is adapted to a one-shot callback from Globe), and we
+  // only emit when a repair ACTUALLY occurred — a silent repair is the early
+  // warning worth surfacing; a clean seed is not news. Fires at most once.
+  const geometryReportedRef = useRef(false)
+  const reportGeometryRepair = useCallback((stats) => {
+    if (geometryReportedRef.current) return
+    if (!stats || (!stats.rewoundCount && !stats.droppedPolygonCount)) return
+    geometryReportedRef.current = true
+    emitSignal('geometry_repaired', {
+      rewound_count: stats.rewoundCount,
+      dropped_polygon_count: stats.droppedPolygonCount,
+      country_count: stats.countryCount,
+    })
+  }, [])
 
   const selectedCountry = useMemo(
     () => (selectedIso3 ? countries.find((c) => c.iso3 === selectedIso3) || null : null),
@@ -561,6 +630,7 @@ export default function Atlas({ appId, token }) {
             statusFilter={statusFilter}
             onTapCountry={selectCountry}
             onTapOcean={deselect}
+            onGeometryRepaired={reportGeometryRepair}
           />
         )}
       </div>

@@ -15,6 +15,7 @@ import {
   ROTATION_SINGULARITY_LAT,
   STATUS_FILTERS,
   angularStepDeg,
+  classifyStatusToggle,
   easePointerToDisc,
   filterCountriesByStatus,
   formatArea,
@@ -189,6 +190,58 @@ test('toggleCountryStatus is pure and ignores empty or unknown operations', () =
   assert.deepEqual([...empty.wishlist], ['CAN'])
   assert.deepEqual([...unknown.visited], ['USA'])
   assert.deepEqual([...unknown.wishlist], ['CAN'])
+})
+
+test('classifyStatusToggle maps a status tap to the right Reflection signal', () => {
+  // Adding a status from absent → item_created with the domain-noun type.
+  assert.deepEqual(classifyStatusToggle(false, false, 'visited'), {
+    event: 'item_created',
+    type: 'visited_country',
+  })
+  assert.deepEqual(classifyStatusToggle(false, false, 'wishlist'), {
+    event: 'item_created',
+    type: 'wishlist_country',
+  })
+  // Toggling an existing status off → item_deleted.
+  assert.deepEqual(classifyStatusToggle(true, false, 'visited'), {
+    event: 'item_deleted',
+    type: 'visited_country',
+  })
+  assert.deepEqual(classifyStatusToggle(false, true, 'wishlist'), {
+    event: 'item_deleted',
+    type: 'wishlist_country',
+  })
+  // Moving between statuses → item_updated with flat from/to.
+  assert.deepEqual(classifyStatusToggle(false, true, 'visited'), {
+    event: 'item_updated',
+    type: 'country',
+    from: 'wishlist',
+    to: 'visited',
+  })
+  assert.deepEqual(classifyStatusToggle(true, false, 'wishlist'), {
+    event: 'item_updated',
+    type: 'country',
+    from: 'visited',
+    to: 'wishlist',
+  })
+  // An unrecognized status is a no-op (never emitted).
+  assert.equal(classifyStatusToggle(false, false, 'other'), null)
+})
+
+test('classifyStatusToggle payloads are flat primitives only (no nested objects, no PII)', () => {
+  const cases = [
+    classifyStatusToggle(false, false, 'visited'),
+    classifyStatusToggle(true, false, 'visited'),
+    classifyStatusToggle(false, true, 'visited'),
+    classifyStatusToggle(false, false, 'wishlist'),
+  ]
+  for (const c of cases) {
+    const { event, ...payload } = c
+    assert.equal(typeof event, 'string')
+    for (const v of Object.values(payload)) {
+      assert.ok(['string', 'number', 'boolean'].includes(typeof v), `flat primitive, got ${typeof v}`)
+    }
+  }
 })
 
 test('nextDragRotation is exact 1:1 away from the poles and eases into them', () => {

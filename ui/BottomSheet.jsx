@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   clamp,
   formatArea,
@@ -113,6 +113,24 @@ export function BottomSheet({
   const [frac, setFrac] = useState(SHEET_OPEN_DEFAULT)
   const [dragging, setDragging] = useState(false)
   const scrollRef = useRef(null)
+
+  // country_search (Reflection) — emitted after the query settles (debounced),
+  // never per keystroke, so zero-result search patterns are visible. We send
+  // only the query LENGTH and the result count — NEVER the query text (no PII).
+  // result_count is the already-filtered list length passed in as `countries`.
+  useEffect(() => {
+    const q = query.trim()
+    if (!q) return undefined
+    const id = setTimeout(() => {
+      if (typeof window !== 'undefined') {
+        window.mobius?.signal?.('country_search', {
+          query_length: q.length,
+          result_count: countries.length,
+        })
+      }
+    }, 600)
+    return () => clearTimeout(id)
+  }, [query, countries.length])
 
   // Opening a country must NOT resize the sheet (owner feedback: the panel
   // jumped when you tapped a country). There is deliberately no auto-lift on

@@ -39,6 +39,7 @@ export function Globe({
   statusFilter,
   onTapCountry,
   onTapOcean,
+  onGeometryRepaired,
 }) {
   const containerRef = useRef(null)
   const d3Ref = useRef(null)
@@ -166,6 +167,14 @@ export function Globe({
         // eslint-disable-next-line no-console
         console.error('d3-geo failed to load', err)
         if (active) setDepFailed(true)
+        // error (Reflection) — a real d3-geo import rejection (not the timeout,
+        // which may still resolve) means the globe can't render. Flat, no PII.
+        if (typeof window !== 'undefined') {
+          window.mobius?.signal?.('error', {
+            message: String(err?.message || err),
+            source: 'd3-geo',
+          })
+        }
       })
     return () => {
       active = false
@@ -429,13 +438,15 @@ export function Globe({
   // every globe tap (the "tapping the globe selects Bermuda" bug). geoArea
   // > 2π is the signature of an inverted feature; rewind it. Memoized so the
   // ~180 area checks run once per data/d3-ready change, not per render.
-  const normalizedCountries = useMemo(() => {
+  const normalized = useMemo(() => {
     const d3 = d3Ref.current
-    if (!d3) return countries
+    if (!d3) return { list: countries, rewoundCount: 0, droppedPolygonCount: 0 }
     const FULL_SPHERE = 2 * Math.PI
     const areaOf = (geometry) =>
       d3.geoArea({ type: 'Feature', properties: {}, geometry })
-    return countries.map((c) => {
+    let rewoundCount = 0
+    let droppedPolygonCount = 0
+    const list = countries.map((c) => {
       let geometry = c.geometry
       // A single corrupt sub-polygon — a near-zero-area / degenerate ring —
       // makes d3-geo report the WHOLE feature as spanning >2π; it then fills the
@@ -449,16 +460,33 @@ export function Globe({
           (poly) => areaOf({ type: 'Polygon', coordinates: poly }) <= FULL_SPHERE
         )
         if (kept.length && kept.length !== geometry.coordinates.length) {
+          droppedPolygonCount += geometry.coordinates.length - kept.length
           geometry = { ...geometry, coordinates: kept }
         }
       }
       // Genuine inverted winding (e.g. Bermuda) still fills the hemisphere after
       // the drop above; rewind the whole feature so d3 fills its interior.
-      return areaOf(geometry) > FULL_SPHERE
-        ? { ...c, geometry: reverseWinding(geometry) }
-        : { ...c, geometry }
+      if (areaOf(geometry) > FULL_SPHERE) {
+        rewoundCount += 1
+        return { ...c, geometry: reverseWinding(geometry) }
+      }
+      return { ...c, geometry }
     })
+    return { list, rewoundCount, droppedPolygonCount }
   }, [countries, ready])
+  const normalizedCountries = normalized.list
+
+  // Report the seed geometry repair counts up to the app (which emits the
+  // geometry_repaired Reflection signal). The parent dedups to one emit and only
+  // fires when a repair actually happened, so a clean seed reports nothing.
+  useEffect(() => {
+    if (!ready || !d3Ref.current) return
+    onGeometryRepaired?.({
+      rewoundCount: normalized.rewoundCount,
+      droppedPolygonCount: normalized.droppedPolygonCount,
+      countryCount: normalized.list.length,
+    })
+  }, [ready, normalized, onGeometryRepaired])
 
   // Paint the selected country last. SVG stacks in document order, so a
   // selected feature drawn early gets its boundary overpainted along every
