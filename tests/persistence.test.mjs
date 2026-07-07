@@ -14,24 +14,23 @@
 //   (d) reads work offline (the runtime's read-through mirror serves the
 //       last-known value through an outage).
 //
-// The runtime + harness live in the data-layer worktree (the source of truth
-// for the primitives); we import them by absolute path so this test pins the
-// real machinery, not a reimplementation. mergeCodeSets comes from Atlas's own
-// built bundle so we test the merge Atlas actually ships.
+// The primitives are provided by a VENDORED, self-contained test double
+// (./_runtime-harness.mjs) that models the runtime's document contract — it
+// replaces an earlier import from a private worktree path that does not exist on
+// a fresh clone or in CI (and mutated getter-only globalThis.navigator on
+// current Node). The double is a behavioural model, not the production runtime;
+// it locks in the four durability properties Atlas relies on so a regression in
+// Atlas's docOpts / mergeCodeSets is caught. mergeCodeSets is imported from
+// Atlas's own source module (pure, no bundle step).
 //
 // Run:
 //   cd app-atlas && npm test            # part of the tests/ glob
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-const WT = '/home/hmzmrzx/projects/mobius/.claude/worktrees/data-layer/frontend'
-const { freshEnv, tick, waitFor } = await import(
-  `${WT}/src/lib/__tests__/mobiusRuntimeHarness.mjs`
-)
-const { createUseDocument, makeStorage, DurableWriteError } = await import(
-  `${WT}/public/mobius-runtime.js`
-)
-const { mergeCodeSets } = await import('./.build/index.mjs')
+import { freshEnv, waitFor } from './_runtime-harness.mjs'
+import { createUseDocument, makeStorage, DurableWriteError } from './_runtime-harness.mjs'
+import { mergeCodeSets } from '../domain.js'
 
 // Atlas's document options (mirrors the Atlas component's docOpts).
 const codeIdentity = (code) => String(code)

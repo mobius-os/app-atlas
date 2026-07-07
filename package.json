@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "build:facts": "node scripts/build-country-facts.mjs",
-    "test": "NODE_PATH=/home/hmzmrzx/projects/mobius/frontend/node_modules node --test tests/"
+    "test": "node --test tests/*.test.mjs"
   },
   "devDependencies": {
     "country-json": "^2.3.0",
