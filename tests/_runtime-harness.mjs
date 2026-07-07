@@ -1,11 +1,10 @@
 // Vendored, self-contained test double for the Möbius document runtime.
 //
 // WHY THIS EXISTS: persistence.test.mjs used to import the REAL runtime + a
-// harness from a private worktree path
-// (/home/hmzmrzx/projects/mobius/.claude/worktrees/data-layer/frontend). That
-// path does not exist on a fresh clone or in CI, so the tests failed to load
-// before running (and the harness also mutated getter-only globalThis.navigator
-// on current Node). This module vendors a COMPACT MODEL of the runtime's
+// harness from the author's private platform worktree. That path does not exist
+// on a fresh clone or in CI, so the tests failed to load before running (and the
+// harness also mutated getter-only globalThis.navigator on current Node). This
+// module vendors a COMPACT MODEL of the runtime's
 // document contract — NOT the production runtime — so the tests are portable and
 // run with zero dependencies.
 //
