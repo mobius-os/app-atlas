@@ -585,11 +585,8 @@ export default function Atlas({ appId, token }) {
           {heroSaying ? <h1 className="cb-saying">{heroSaying}</h1> : null}
         </div>
         <div className="cb-header-meta">
-          <SyncPill
-            online={online}
-            hasRuntime={storage.hasRuntime()}
-            saving={visitedDoc.status === 'saving' || wishlistDoc.status === 'saving'}
-          />
+          {/* Silent when healthy — renders only when offline (see SyncPill). */}
+          <SyncPill online={online} hasRuntime={storage.hasRuntime()} />
           {/* The single source of progress now: a balanced "visited / total"
               chip (both numbers the same weight — see .cb-counter). The hero
               line is flavor; this is the number. */}

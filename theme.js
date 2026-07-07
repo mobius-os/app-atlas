@@ -75,6 +75,16 @@ export const CSS = `
      instead of highlight. The white lift keeps it clearly lighter than
      the visited green even on themes whose accent is itself green. */
   --cb-selected-fill: color-mix(in srgb, var(--accent) 72%, #ffffff 28%);
+  /* Foreground on the ACTIVE 'Been'/'Want to go' CTAs. Those CTAs fill with the
+     app-identity status colors (--cb-visited-fill green / --cb-wishlist orange),
+     NOT the theme --accent — so --accent-fg is the wrong token here: on the
+     default theme it resolves to white, and white on the orange fill is ~2:1
+     (WCAG fail). Per the design conventions' own carve-out, a foreground on an
+     app-specific accent the theme can't express stays a hardcoded, contrast-
+     tuned ink. This dark ink clears 6:1+ on both the green and the orange fill
+     in light AND dark themes (the fills are app-owned and only mix ~12% with
+     theme tokens, so they stay legible under any theme). Deliberate identity-
+     palette divergence, like --cb-ocean above. */
   --cb-active-cta-text: #101820;
   position: fixed;
   inset: 0;
@@ -164,8 +174,11 @@ export const CSS = `
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
-  background: var(--accent, currentColor);
-  color: var(--bg, #0c0c0c);
+  /* Accent FILL → --accent-fg is the one legal foreground (no fallback hex):
+     the shell themes it to a legible ink for the active accent, so a custom
+     theme can't strand this glyph unreadable the way var(--bg) did. */
+  background: var(--accent);
+  color: var(--accent-fg);
   font-weight: 700;
   line-height: 1;
 }
@@ -238,9 +251,9 @@ export const CSS = `
   font-weight: 600;
   color: var(--muted);
 }
-/* Sync pill — sits next to the counter; hidden when synced + online
-   (the common case). When pending > 0 or offline, the pill softly
-   announces what state the user's writes are in. */
+/* Sync pill — SILENT WHEN HEALTHY: not rendered while online. It mounts only
+   when offline, to plainly announce that taps will sync on reconnect. (The old
+   online "Saving…" state was removed — durable queuing is invisible plumbing.) */
 .cb-pill {
   display: inline-flex;
   align-items: center;
@@ -266,14 +279,6 @@ export const CSS = `
 }
 .cb-pill--offline .cb-pill-dot {
   background: color-mix(in srgb, var(--text) 50%, transparent);
-}
-/* Saving — a transient online state while a durable write is in flight. The
-   accent dot reads as "working", distinct from the muted offline dot. */
-.cb-pill--saving {
-  color: var(--accent);
-}
-.cb-pill--saving .cb-pill-dot {
-  background: var(--accent);
 }
 /* /mobius-ui:SyncPill */
 
@@ -385,7 +390,8 @@ export const CSS = `
   background: var(--cb-surface-strong);
   backdrop-filter: blur(14px);
   border-top: 1px solid var(--cb-border);
-  border-radius: 22px 22px 0 0;
+  /* Sheet top on the shared radius scale (16px). */
+  border-radius: 16px 16px 0 0;
   /* Neutral elevation shadow — same in light + dark themes; the
      color-mix tint comes from the surface underneath. */
   box-shadow: 0 -10px 30px color-mix(in srgb, var(--text) 18%, transparent);
@@ -405,15 +411,30 @@ export const CSS = `
 .cb-sheet-handle {
   /* Subtle grab affordance, not a band. The visible row is short (26px)
      to give the list back ~18px of vertical space (owner: the handle ate
-     too much). The hit area stays finger-friendly because the handle's
-     own padding plus the rounded sheet lip above it read as one target;
-     the grip is centred in the 26px row. */
+     too much). The grip is centred in the 26px row; a ::before below extends
+     the actual touch target to 44px. */
   flex-shrink: 0;
   height: 26px;
   display: grid;
   place-items: center;
   touch-action: none;
   cursor: ns-resize;
+  position: relative;
+}
+/* WCAG 2.5.8: a resize handle is an interactive control and must offer a
+   >=44px touch target. The visible grip stays a slim 26px; this transparent
+   ::before grows the HIT area to 44px without eating list space. It extends
+   DOWNWARD (the sheet's rounded top edge + overflow:hidden clip anything
+   above), and where it reaches the search row below, those later-painted
+   controls win hit-testing — so the search field stays tappable while the
+   surrounding gap grabs the handle. */
+.cb-sheet-handle::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 44px;
 }
 /* The handle is keyboard-operable (role=separator, tabindex 0, arrow-key
    resize). Inset the shared focus ring so it reads inside the short 26px row
@@ -441,7 +462,7 @@ export const CSS = `
   align-items: center;
   gap: 10px;
   padding: 10px 14px;
-  border-radius: 14px;
+  border-radius: 12px;
   background: var(--cb-surface);
   border: 1px solid var(--cb-border);
   color: var(--muted);
@@ -530,7 +551,7 @@ export const CSS = `
   display: grid;
   place-items: center;
   padding: 0;
-  border-radius: 14px;
+  border-radius: 12px;
   border: 1px solid var(--cb-border);
   background: var(--cb-surface);
   color: var(--muted);
@@ -648,7 +669,7 @@ export const CSS = `
   display: flex;
   flex-direction: column;
   border: 1px solid var(--cb-border);
-  border-radius: 14px;
+  border-radius: 12px;
   background: color-mix(in srgb, var(--surface) 50%, transparent);
   overflow: hidden;
 }
@@ -694,7 +715,7 @@ export const CSS = `
 .cb-detail-cta {
   min-height: 44px;
   padding: 0 14px;
-  border-radius: 14px;
+  border-radius: 12px;
   font-size: 15px;
   font-weight: 600;
   letter-spacing: 0.01em;
@@ -740,12 +761,45 @@ export const CSS = `
   padding: 0 12px max(18px, env(safe-area-inset-bottom));
   -webkit-overflow-scrolling: touch;
 }
-.cb-list-empty {
-  padding: 24px;
+/* mobius-ui:Empty v1 — keep in sync; library candidate. Diverge below the marker only. */
+/* Three-part empty state (mark + title + subtitle) for the list — loading, no
+   search match, no visited, no wishlist — replacing the old bare one-liners. */
+.cb-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   text-align: center;
+  gap: 8px;
+  max-width: 440px;
+  margin: 0 auto;
+  padding: 40px 24px;
   color: var(--muted);
-  font-size: 14px;
 }
+.cb-empty-mark {
+  width: 60px;
+  height: 60px;
+  margin-bottom: 8px;
+  border-radius: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 28px;
+  line-height: 1;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--cb-border));
+}
+.cb-empty-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+.cb-empty-text {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+/* /mobius-ui:Empty */
 .cb-row {
   /* Min-height enforces a 44px tap target without needing to
      pad the row visually — the grid keeps content centred. */
@@ -758,7 +812,7 @@ export const CSS = `
   padding: 8px 14px;
   margin-bottom: 6px;
   border: 1px solid transparent;
-  border-radius: 14px;
+  border-radius: 12px;
   background: color-mix(in srgb, var(--surface) 60%, transparent);
   color: var(--text);
   font: inherit;

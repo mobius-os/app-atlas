@@ -479,22 +479,42 @@ export function BottomSheet({
         >
           {loading ? (
             // While the world is still loading, the list is empty only because
-            // the data hasn't arrived — NOT because nothing matches. Showing
-            // "No countries match" here contradicted the globe's "Loading the
+            // the data hasn't arrived — NOT because nothing matches. Showing a
+            // "no results" state here would contradict the globe's "Loading the
             // world…" spinner (two opposite messages at once). Mirror the
             // loading copy until the data lands, then fall through to the real
             // empty-states below.
-            <div className="cb-list-empty" role="status">Loading the world…</div>
-          ) : countries.length === 0 ? (
-            <div className="cb-list-empty">
-              {query
-                ? 'No countries match.'
-                : statusFilter === 'visited'
-                  ? 'No countries marked “Been” yet — tap the ring on a row to add one.'
-                  : statusFilter === 'wishlist'
-                    ? 'Nothing on your “Want to go” list yet — tap the star on a row to add one.'
-                    : 'No countries match.'}
+            <div className="cb-empty" role="status">
+              <div className="cb-empty-mark" aria-hidden="true">🌍</div>
+              <div className="cb-empty-title">Loading the world…</div>
+              <p className="cb-empty-text">One moment while the country map loads.</p>
             </div>
+          ) : countries.length === 0 ? (
+            query ? (
+              <div className="cb-empty">
+                <div className="cb-empty-mark" aria-hidden="true">🔍</div>
+                <div className="cb-empty-title">No matches</div>
+                <p className="cb-empty-text">No country matches your search. Try a different name or code.</p>
+              </div>
+            ) : statusFilter === 'visited' ? (
+              <div className="cb-empty">
+                <div className="cb-empty-mark" aria-hidden="true">✈️</div>
+                <div className="cb-empty-title">No countries marked “Been”</div>
+                <p className="cb-empty-text">Tap the ring on a row to mark somewhere you’ve been.</p>
+              </div>
+            ) : statusFilter === 'wishlist' ? (
+              <div className="cb-empty">
+                <div className="cb-empty-mark" aria-hidden="true">⭐</div>
+                <div className="cb-empty-title">Nothing on your list yet</div>
+                <p className="cb-empty-text">Tap the star on a row to add a place you want to go.</p>
+              </div>
+            ) : (
+              <div className="cb-empty">
+                <div className="cb-empty-mark" aria-hidden="true">🌍</div>
+                <div className="cb-empty-title">No countries</div>
+                <p className="cb-empty-text">The country list is empty right now.</p>
+              </div>
+            )
           ) : (
             countries.map((country) => {
               const isVisited = visited.has(country.iso3)
