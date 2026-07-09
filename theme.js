@@ -3,7 +3,7 @@
 export const CSS = `
 /* mobius-ui:NativeTouch v1 — keep in sync; library candidate. Diverge below the marker only. */
 * { -webkit-tap-highlight-color: transparent; }
-.cb-sheet-handle, .cb-detail-cta, .cb-detail-close, .cb-sheet-search-clear, .cb-row {
+.cb-sheet-handle, .cb-detail-cta, .cb-detail-close, .cb-sheet-search-clear, .cb-row, .cb-globe-control {
   touch-action: manipulation;
 }
 .cb-header, .cb-counter, .cb-pill, .cb-detail-flag, .cb-row-flag {
@@ -20,6 +20,10 @@ export const CSS = `
   }
   .cb-sheet-search-clear:hover { color: var(--text); }
   .cb-detail-close:hover {
+    background: var(--surface2, var(--surface));
+    color: var(--text);
+  }
+  .cb-globe-control:hover {
     background: var(--surface2, var(--surface));
     color: var(--text);
   }
@@ -300,6 +304,39 @@ export const CSS = `
   width: 100%;
   height: 100%;
   display: block;
+}
+.cb-globe-controls {
+  position: absolute;
+  left: max(14px, env(safe-area-inset-left));
+  bottom: max(14px, env(safe-area-inset-bottom));
+  z-index: 3;
+  display: inline-flex;
+  gap: 6px;
+  padding: 4px;
+  border-radius: 12px;
+  border: 1px solid var(--cb-border);
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 4px 8px color-mix(in srgb, var(--text) 12%, transparent);
+}
+.cb-globe-control {
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, transform 90ms ease;
+}
+.cb-globe-control:active {
+  transform: scale(0.94);
+  background: color-mix(in srgb, var(--surface2, var(--surface)) 76%, transparent);
 }
 /* Suppress the outline only for mouse/touch focus; the shared Focus
    block below still paints a ring for keyboard (:focus-visible) users. */

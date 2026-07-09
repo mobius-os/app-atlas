@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   INITIAL_ROTATION,
   INERTIA_FRICTION,
@@ -44,6 +44,10 @@ export function Globe({
   onGeometryRepaired,
 }) {
   const containerRef = useRef(null)
+  const sphereRef = useRef(null)
+  const graticuleRef = useRef(null)
+  const shineRef = useRef(null)
+  const countryPathRefs = useRef(new Map())
   const d3Ref = useRef(null)
   const dragRef = useRef({
     active: false,
@@ -128,6 +132,12 @@ export function Globe({
   // every reconnect (see the useEffect listening for window 'online').
   const [depAttempt, setDepAttempt] = useState(0)
   const [depFailed, setDepFailed] = useState(false)
+
+  const setCountryPathNode = useCallback((iso3, node) => {
+    if (!iso3) return
+    if (node) countryPathRefs.current.set(iso3, node)
+    else countryPathRefs.current.delete(iso3)
+  }, [])
 
   // d3-geo lives at runtime — resolved by the app frame's import map to the
   // self-hosted /vendor/d3-geo@3 bundle (no longer esm.sh), so the globe works
@@ -425,6 +435,18 @@ export function Globe({
     [setZoomBoth],
   )
 
+  const resetView = useCallback(() => {
+    cancelRotationFrame()
+    cancelInertia()
+    cancelZoomGlide()
+    const nextRotation = INITIAL_ROTATION.slice()
+    rotationRef.current = nextRotation
+    setRotation(nextRotation)
+    setZoomBoth(1)
+    velocityRef.current.samples = []
+    setSpinningBoth(false)
+  }, [cancelInertia, cancelRotationFrame, cancelZoomGlide, setSpinningBoth, setZoomBoth])
+
   // Cancel any in-flight frame / inertia / zoom-glide loop when the globe
   // unmounts so a late rAF can't call setState on a torn-down component.
   useEffect(() => () => {
@@ -537,6 +559,91 @@ export function Globe({
     const graticule = d3.geoGraticule10()
     return { projection, path, graticule, radius }
   }, [ready, rotation, zoom, size.height, size.width, spinning])
+
+  // Per-frame rendering stays out of React reconciliation. Dragging used to
+  // rebuild ~195 country elements in JSX every rAF; now React owns structure
+  // and state classes, while this layout effect only mutates the path data that
+  // actually changes with rotation/zoom. That keeps the globe responsive on
+  // embedded WebViews where SVG diffing is the expensive part.
+  useLayoutEffect(() => {
+    if (!projectionData) return
+    const sphere = projectionData.path({ type: 'Sphere' }) || ''
+    sphereRef.current?.setAttribute('d', sphere)
+    shineRef.current?.setAttribute('d', sphere)
+    graticuleRef.current?.setAttribute('d', projectionData.path(projectionData.graticule) || '')
+
+    for (const country of renderCountries) {
+      const node = countryPathRefs.current.get(country.iso3)
+      if (!node) continue
+      const d = projectionData.path({
+        type: 'Feature',
+        properties: {},
+        geometry: country.geometry,
+      })
+      if (d) {
+        node.setAttribute('d', d)
+        node.style.display = ''
+      } else {
+        node.removeAttribute('d')
+        node.style.display = 'none'
+      }
+    }
+  }, [projectionData, renderCountries])
+
+  const countryNodes = useMemo(() => (
+    renderCountries.map((country) => {
+      const isVisited = visited.has(country.iso3)
+      const isWishlisted = wishlist.has(country.iso3)
+      const isSelected = country.iso3 === selectedIso3
+      // Mirror the list's status filter on the globe: countries that
+      // don't match fade back so the matching set reads at a glance.
+      // The selected country never dims — selection outranks filters.
+      const matchesFilter =
+        !statusFilter ||
+        statusFilter === 'all' ||
+        (statusFilter === 'visited' ? isVisited : isWishlisted && !isVisited)
+      const isDimmed = !matchesFilter && !isSelected
+      const label = isVisited
+        ? `${country.displayName} — visited`
+        : isWishlisted
+          ? `${country.displayName} — want to visit`
+          : country.displayName
+      return (
+        <g
+          key={country.iso3}
+          role="button"
+          data-atlas-country={country.iso3}
+          tabIndex={0}
+          aria-label={label}
+          onClick={(event) => {
+            event.currentTarget.blur?.()
+            if (tapHandledRef.current) return
+            if (dragRef.current.moved) return
+            onTapCountry(country)
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault()
+              onTapCountry(country)
+            }
+          }}
+        >
+          <title>{label}</title>
+          <path
+            ref={(node) => setCountryPathNode(country.iso3, node)}
+            className={
+              'cb-country' +
+              (isVisited ? ' cb-country--visited' : '') +
+              (isWishlisted ? ' cb-country--wishlist' : '') +
+              (isSelected ? ' cb-country--selected' : '') +
+              (isDimmed ? ' cb-country--dimmed' : '')
+            }
+            vectorEffect="non-scaling-stroke"
+          />
+        </g>
+      )
+    })
+  ), [renderCountries, visited, wishlist, selectedIso3, statusFilter, onTapCountry, setCountryPathNode])
 
   // ----- pointer drag + pinch-zoom -------------------------------------
   // One finger rotates; a second finger promotes the gesture to a pinch
@@ -883,7 +990,7 @@ export function Globe({
              Tapping the ocean clears selection (so the user can return
              to the unfiltered list without hunting for the close X). */}
           <path
-            d={projectionData.path({ type: 'Sphere' })}
+            ref={sphereRef}
             data-atlas-ocean="true"
             fill="url(#cb-ocean)"
             stroke="color-mix(in srgb, var(--text) 22%, transparent)"
@@ -898,7 +1005,7 @@ export function Globe({
 
           {/* Graticule */}
           <path
-            d={projectionData.path(projectionData.graticule)}
+            ref={graticuleRef}
             fill="none"
             stroke="color-mix(in srgb, var(--text) 14%, transparent)"
             strokeWidth="0.6"
@@ -911,68 +1018,11 @@ export function Globe({
              and hover tooltips surface the name on desktop. tabIndex and
              a keyboard handler make small-country selection reachable
              without a sub-pixel tap. */}
-          {renderCountries.map((country) => {
-            const d = projectionData.path({
-              type: 'Feature',
-              properties: {},
-              geometry: country.geometry,
-            })
-            if (!d) return null
-            const isVisited = visited.has(country.iso3)
-            const isWishlisted = wishlist.has(country.iso3)
-            const isSelected = country.iso3 === selectedIso3
-            // Mirror the list's status filter on the globe: countries that
-            // don't match fade back so the matching set reads at a glance.
-            // The selected country never dims — selection outranks filters.
-            const matchesFilter =
-              !statusFilter ||
-              statusFilter === 'all' ||
-              (statusFilter === 'visited' ? isVisited : isWishlisted && !isVisited)
-            const isDimmed = !matchesFilter && !isSelected
-            const label = isVisited
-              ? `${country.displayName} — visited`
-              : isWishlisted
-                ? `${country.displayName} — want to visit`
-              : country.displayName
-            return (
-              <g
-                key={country.iso3}
-                role="button"
-                data-atlas-country={country.iso3}
-                tabIndex={0}
-                aria-label={label}
-                onClick={(event) => {
-                  event.currentTarget.blur?.()
-                  if (tapHandledRef.current) return
-                  if (dragRef.current.moved) return
-                  onTapCountry(country)
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault()
-                    onTapCountry(country)
-                  }
-                }}
-              >
-                <title>{label}</title>
-                <path
-                  d={d}
-                  className={
-                    'cb-country' +
-                    (isVisited ? ' cb-country--visited' : '') +
-                    (isWishlisted ? ' cb-country--wishlist' : '') +
-                    (isSelected ? ' cb-country--selected' : '') +
-                    (isDimmed ? ' cb-country--dimmed' : '')
-                  }
-                  vectorEffect="non-scaling-stroke"
-                />
-              </g>
-            )
-          })}
+          {countryNodes}
 
           {/* Specular shine */}
           <path
-            d={projectionData.path({ type: 'Sphere' })}
+            ref={shineRef}
             fill="url(#cb-shine)"
             opacity="0.18"
             pointerEvents="none"
@@ -980,10 +1030,27 @@ export function Globe({
         </svg>
       )}
 
-      {/* Zoom is driven by wheel/trackpad, pinch, and the +/- keys (see the
-         gesture handlers + onKeyDown). The on-screen +/- buttons were removed
-         so the globe surface is uncluttered — scroll/pinch to zoom is the
-         expected gesture and the keyboard path keeps it accessible. */}
+      {projectionData ? (
+        <div className="cb-globe-controls" role="group" aria-label="Globe controls">
+          <button type="button" className="cb-globe-control" onClick={() => zoomBy(1 / ZOOM_STEP)} aria-label="Zoom out" title="Zoom out">
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+              <line x1="4" y1="9" x2="14" y2="9" />
+            </svg>
+          </button>
+          <button type="button" className="cb-globe-control" onClick={resetView} aria-label="Reset globe view" title="Reset view">
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M14.2 7.1a5.4 5.4 0 1 0 .3 4.1" />
+              <path d="M14.4 3.8v3.4h-3.4" />
+            </svg>
+          </button>
+          <button type="button" className="cb-globe-control" onClick={() => zoomBy(ZOOM_STEP)} aria-label="Zoom in" title="Zoom in">
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+              <line x1="4" y1="9" x2="14" y2="9" />
+              <line x1="9" y1="4" x2="9" y2="14" />
+            </svg>
+          </button>
+        </div>
+      ) : null}
     </div>
   )
 }
