@@ -22,6 +22,8 @@ import {
   versorFromAngles,
 } from '../domain.js'
 
+const TAP_MOVE_PX = 6
+
 // --------------------------------------------------------------------------
 // Globe — orthographic d3-geo projection on an SVG canvas.
 //
@@ -81,6 +83,7 @@ export function Globe({
   // inertiaRef holds that loop's frame id so pointerdown / unmount can cancel it.
   const velocityRef = useRef({ vLng: 0, vLat: 0, samples: [] })
   const inertiaRef = useRef(0)
+  const tapHandledRef = useRef(false)
   // Two independent motion sources can keep the globe "in motion": the
   // release-inertia spin and the zoom glide. spinning (coarse tessellation)
   // must stay true while EITHER runs, so each owns a boolean and the derived
@@ -500,6 +503,14 @@ export function Globe({
     return [...normalizedCountries.filter((c) => c.iso3 !== selectedIso3), selected]
   }, [normalizedCountries, selectedIso3])
 
+  const countryByIso3 = useMemo(() => {
+    const map = new Map()
+    for (const country of normalizedCountries) {
+      if (country?.iso3) map.set(country.iso3, country)
+    }
+    return map
+  }, [normalizedCountries])
+
   // Re-compute projection on every rotation/zoom/size change.
   const projectionData = useMemo(() => {
     if (!ready || !d3Ref.current || !size.width || !size.height) return null
@@ -548,6 +559,27 @@ export function Globe({
     }
   }
 
+  const resolveTapFromPoint = useCallback((event) => {
+    if (typeof document === 'undefined' || !event) return false
+    const root = containerRef.current
+    const hit = document.elementFromPoint(event.clientX, event.clientY)
+    if (!root || !hit || !root.contains(hit)) return false
+    const countryNode = hit.closest?.('[data-atlas-country]')
+    if (countryNode && root.contains(countryNode)) {
+      const country = countryByIso3.get(countryNode.getAttribute('data-atlas-country'))
+      if (country) {
+        onTapCountry?.(country)
+        return true
+      }
+    }
+    const oceanNode = hit.closest?.('[data-atlas-ocean]')
+    if (oceanNode && root.contains(oceanNode)) {
+      onTapOcean?.()
+      return true
+    }
+    return false
+  }, [countryByIso3, onTapCountry, onTapOcean])
+
   const onPointerDown = (event) => {
     event.currentTarget.blur?.()
     // A fresh grab takes over: stop any glide already in flight (rotation OR
@@ -564,15 +596,16 @@ export function Globe({
       // moved so the gesture can't end in a tap).
       dragRef.current.active = false
       dragRef.current.moved = true
+      setSpinningBoth(true)
       pinchRef.current = {
         active: true,
         startDist: pinchSpread(pointersRef.current) || 1,
         startZoom: zoomRef.current,
       }
     } else {
-      // Drag-rotate begins — mark the globe in-motion so the projection drops
-      // to the cheaper tessellation for the duration of the gesture + glide.
-      setSpinningBoth(true)
+      // Drag-rotate is only promoted to "moving" after the tap threshold in
+      // onPointerMove. A plain country tap should not trigger a projection
+      // precision swap before the click/selection resolves.
       dragRef.current = {
         active: true,
         moved: false,
@@ -605,7 +638,11 @@ export function Globe({
     if (!dragRef.current.active) return
     const dx = event.clientX - dragRef.current.startX
     const dy = event.clientY - dragRef.current.startY
-    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) dragRef.current.moved = true
+    if (!dragRef.current.moved) {
+      if (Math.hypot(dx, dy) <= TAP_MOVE_PX) return
+      dragRef.current.moved = true
+      setSpinningBoth(true)
+    }
 
     // Versor drag: solve the rotation that carries the point first grabbed to
     // the point now under the pointer, so the surface stays glued to the finger
@@ -704,6 +741,7 @@ export function Globe({
     if (pointersRef.current.size > 0) return // other fingers still down
     const wasDrag = dragRef.current.active && dragRef.current.moved
     dragRef.current.active = false
+    let handledTap = false
 
     // Release glide — only when the finger actually dragged (a tap selects and
     // must not spin). Drop any queued coalesced frame first so the inertia loop
@@ -715,6 +753,7 @@ export function Globe({
       startInertia()
     } else {
       setSpinningBoth(false)
+      if (event?.type === 'pointerup') handledTap = resolveTapFromPoint(event)
     }
     velocityRef.current.samples = []
 
@@ -726,7 +765,9 @@ export function Globe({
     // sees moved=true and skips the tap when the user was dragging.
     setTimeout(() => {
       dragRef.current.moved = false
+      tapHandledRef.current = false
     }, 0)
+    if (handledTap) tapHandledRef.current = true
   }
   const onPointerUp = (event) => finishDrag(event)
   const onPointerCancel = (event) => finishDrag(event)
@@ -764,8 +805,9 @@ export function Globe({
   // a trackpad pinch.
   const onWheel = (event) => {
     event.preventDefault()
-    const delta = clamp(event.deltaY || 0, -600, 600)
-    zoomBy(Math.exp(-delta * 0.0015))
+    const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 240 : 1
+    const delta = clamp((event.deltaY || 0) * unit, -480, 480)
+    zoomBy(Math.exp(-delta * 0.0012))
   }
 
   // Keyboard zoom — +/- (and =, the unshifted +) when the globe has focus.
@@ -842,10 +884,12 @@ export function Globe({
              to the unfiltered list without hunting for the close X). */}
           <path
             d={projectionData.path({ type: 'Sphere' })}
+            data-atlas-ocean="true"
             fill="url(#cb-ocean)"
             stroke="color-mix(in srgb, var(--text) 22%, transparent)"
             strokeWidth="1"
             onClick={() => {
+              if (tapHandledRef.current) return
               if (dragRef.current.moved) return
               onTapOcean?.()
             }}
@@ -858,6 +902,7 @@ export function Globe({
             fill="none"
             stroke="color-mix(in srgb, var(--text) 14%, transparent)"
             strokeWidth="0.6"
+            pointerEvents="none"
           />
 
           {/* Countries — each path is wrapped in a <g role="button"> with
@@ -893,10 +938,12 @@ export function Globe({
               <g
                 key={country.iso3}
                 role="button"
+                data-atlas-country={country.iso3}
                 tabIndex={0}
                 aria-label={label}
                 onClick={(event) => {
                   event.currentTarget.blur?.()
+                  if (tapHandledRef.current) return
                   if (dragRef.current.moved) return
                   onTapCountry(country)
                 }}

@@ -114,9 +114,9 @@ const POLE_EASE_START = 72
 export const MIN_ZOOM = 0.75
 export const MAX_ZOOM = 6
 // Each +/- button press (and keyboard +/-) steps the zoom by this factor.
-// 1.4× per step ≈ 5 presses to cross the whole range, which feels like
-// "a few taps" rather than a slow crawl.
-export const ZOOM_STEP = 1.4
+// 1.28× per step keeps keyboard zoom calmer than the old 1.4× jump while
+// still crossing the range in a handful of presses.
+export const ZOOM_STEP = 1.28
 
 // Zoom glide — wheel notches and +/- keys are DISCRETE: each one would jump
 // the radius in a single step (a visible staircase). Instead they set a zoom
@@ -127,17 +127,17 @@ export const ZOOM_STEP = 1.4
 // manipulation (finger-locked), so it bypasses the ease and sets zoom now;
 // only the discrete inputs glide. Below ZOOM_SNAP_EPS the follower is within
 // a pixel of the target, so it snaps exact and stops (no infinite asymptote).
-export const ZOOM_EASE = 0.2
+export const ZOOM_EASE = 0.18
 export const ZOOM_SNAP_EPS = 0.0005
 
 // Release inertia — when the finger lifts, the globe keeps spinning with the
-// velocity it had and decays by INERTIA_FRICTION each frame (≈0.92 → loses
-// ~8%/frame, a natural ~0.4s glide at 60fps). Below INERTIA_MIN_SPEED°/frame
+// velocity it had and decays by INERTIA_FRICTION each frame (≈0.9 → loses
+// ~10%/frame, a short controlled glide at 60fps). Below INERTIA_MIN_SPEED°/frame
 // the motion is imperceptible, so the loop stops. INERTIA_MAX_SPEED caps a
 // flick so a fast swipe can't launch the globe into a blur.
-export const INERTIA_FRICTION = 0.92
-export const INERTIA_MIN_SPEED = 0.015 // °/frame — below this the glide has visually stopped
-export const INERTIA_MAX_SPEED = 8 // °/frame — clamp a hard flick to a readable spin
+export const INERTIA_FRICTION = 0.9
+export const INERTIA_MIN_SPEED = 0.02 // °/frame — below this the glide has visually stopped
+export const INERTIA_MAX_SPEED = 5.5 // °/frame — clamp a hard flick to a readable spin
 // How many recent move deltas average into the release velocity. Averaging the
 // last few (not just the final delta) smooths out a jittery last sample so the
 // glide direction matches the swipe the user actually made.

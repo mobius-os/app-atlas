@@ -62,11 +62,11 @@ export const CSS = `
   --cb-land-fill: color-mix(in srgb, #d7c49a 72%, var(--surface) 28%);
   --cb-land-hover: color-mix(in srgb, #e5d4aa 78%, var(--text) 22%);
   --cb-land-stroke: color-mix(in srgb, #24333b 74%, var(--bg) 26%);
-  /* Visited rides the theme's semantic --green (falls back to a stable
-     green on themes that don't define it) so "visited" tracks per-theme
-     accent shifts instead of pinning one hardcoded hue. */
-  --cb-visited-base: var(--green, #27ae60);
-  --cb-visited-fill: color-mix(in srgb, var(--cb-visited-base) 88%, var(--cb-land-fill) 12%);
+  /* Visited stays recognizably green, but is tempered with the active
+     accent + land fill so a map with many stamps does not wash the whole
+     screenshot into one green cast. */
+  --cb-visited-base: color-mix(in srgb, var(--green, #27ae60) 74%, var(--accent) 26%);
+  --cb-visited-fill: color-mix(in srgb, var(--cb-visited-base) 78%, var(--cb-land-fill) 22%);
   --cb-visited-stroke: color-mix(in srgb, #d9ffe7 72%, var(--bg) 28%);
   --cb-wishlist: color-mix(in srgb, #f39c12 88%, var(--cb-land-fill) 12%);
   --cb-wishlist-fill: color-mix(in srgb, var(--cb-wishlist) 82%, var(--cb-land-fill) 18%);
@@ -134,7 +134,7 @@ export const CSS = `
 .cb-header h1 {
   margin: 0;
   font-size: 18px;
-  letter-spacing: 0.01em;
+  letter-spacing: 0;
   color: var(--text);
   min-width: 0;
   line-height: 1.15;
@@ -162,7 +162,7 @@ export const CSS = `
 .cb-brand-icon {
   width: 34px;
   height: 34px;
-  border-radius: 6px;
+  border-radius: 8px;
   object-fit: cover;
   flex-shrink: 0;
   display: block;
@@ -170,7 +170,7 @@ export const CSS = `
 .cb-brand-fallback {
   width: 34px;
   height: 34px;
-  border-radius: 6px;
+  border-radius: 8px;
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
@@ -265,7 +265,7 @@ export const CSS = `
   font-family: var(--mono);
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
   border: 1px solid var(--cb-border);
   background: var(--cb-surface);
   color: var(--muted);
@@ -394,11 +394,10 @@ export const CSS = `
   border-radius: 16px 16px 0 0;
   /* Neutral elevation shadow — same in light + dark themes; the
      color-mix tint comes from the surface underneath. */
-  box-shadow: 0 -10px 30px color-mix(in srgb, var(--text) 18%, transparent);
-  /* Snap animations only — drag updates set the dragging class
-     which disables the transition so the sheet tracks the finger
-     without a perceived lag. */
-  transition: height 220ms cubic-bezier(.22,1,.36,1);
+  box-shadow: 0 -4px 8px color-mix(in srgb, var(--text) 18%, transparent);
+  /* Drag updates set height directly; avoid animating layout properties so
+     the globe and list stay responsive during snap changes. */
+  transition: box-shadow 180ms ease, border-color 180ms ease;
   overflow: hidden;
   /* min-height previously used vh which conflicted with the
      percent-of-cb-app inline height during keyboard-up; drop
@@ -637,7 +636,7 @@ export const CSS = `
   margin-top: 2px;
   font-size: 12px;
   color: var(--muted);
-  letter-spacing: 0.02em;
+  letter-spacing: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -685,7 +684,7 @@ export const CSS = `
 }
 .cb-info-row dt {
   font-size: 12px;
-  letter-spacing: 0.02em;
+  letter-spacing: 0;
   color: var(--muted);
 }
 .cb-info-row dd {
@@ -718,7 +717,7 @@ export const CSS = `
   border-radius: 12px;
   font-size: 15px;
   font-weight: 600;
-  letter-spacing: 0.01em;
+  letter-spacing: 0;
   background: color-mix(in srgb, var(--surface2, var(--surface)) 88%, transparent);
   color: var(--text);
   border: 1px solid var(--cb-border);
@@ -930,24 +929,15 @@ export const CSS = `
 }
 /* /mobius-ui:Card */
 
-/* mobius-ui:Scrollskin v1 — keep in sync; library candidate. Slim
-   token-colored scrollbar so desktop/web doesn't fall back to the raw
-   OS default the mobile-first layout otherwise shows on wide screens. */
+/* mobius-ui:Scrollskin v2 — keep in sync; hidden by default, content stays scrollable. */
 .cb-list, .cb-detail-body {
-  scrollbar-width: thin;
-  scrollbar-color: var(--cb-border) transparent;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 .cb-list::-webkit-scrollbar, .cb-detail-body::-webkit-scrollbar {
-  width: 9px;
-}
-.cb-list::-webkit-scrollbar-track, .cb-detail-body::-webkit-scrollbar-track {
-  background: transparent;
-}
-.cb-list::-webkit-scrollbar-thumb, .cb-detail-body::-webkit-scrollbar-thumb {
-  background: var(--cb-border);
-  border-radius: 999px;
-  border: 2px solid transparent;
-  background-clip: padding-box;
+  display: none;
+  width: 0;
+  height: 0;
 }
 /* /mobius-ui:Scrollskin */
 
