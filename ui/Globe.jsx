@@ -47,6 +47,7 @@ export function Globe({
   const sphereRef = useRef(null)
   const graticuleRef = useRef(null)
   const shineRef = useRef(null)
+  const textureRef = useRef(null)
   const countryPathRefs = useRef(new Map())
   const d3Ref = useRef(null)
   const dragRef = useRef({
@@ -435,18 +436,6 @@ export function Globe({
     [setZoomBoth],
   )
 
-  const resetView = useCallback(() => {
-    cancelRotationFrame()
-    cancelInertia()
-    cancelZoomGlide()
-    const nextRotation = INITIAL_ROTATION.slice()
-    rotationRef.current = nextRotation
-    setRotation(nextRotation)
-    setZoomBoth(1)
-    velocityRef.current.samples = []
-    setSpinningBoth(false)
-  }, [cancelInertia, cancelRotationFrame, cancelZoomGlide, setSpinningBoth, setZoomBoth])
-
   // Cancel any in-flight frame / inertia / zoom-glide loop when the globe
   // unmounts so a late rAF can't call setState on a torn-down component.
   useEffect(() => () => {
@@ -570,6 +559,7 @@ export function Globe({
     const sphere = projectionData.path({ type: 'Sphere' }) || ''
     sphereRef.current?.setAttribute('d', sphere)
     shineRef.current?.setAttribute('d', sphere)
+    textureRef.current?.setAttribute('d', sphere)
     graticuleRef.current?.setAttribute('d', projectionData.path(projectionData.graticule) || '')
 
     for (const country of renderCountries) {
@@ -970,6 +960,19 @@ export function Globe({
             <filter id="cb-glow" x="-50%" y="-50%" width="200%" height="200%">
               <feGaussianBlur stdDeviation="16" />
             </filter>
+            <filter id="cb-earth-grain" x="-5%" y="-5%" width="110%" height="110%">
+              <feTurbulence type="fractalNoise" baseFrequency="0.018 0.032" numOctaves="3" seed="17" result="noise" />
+              <feColorMatrix
+                in="noise"
+                type="matrix"
+                values="0 0 0 0 1
+                        0 0 0 0 0.96
+                        0 0 0 0 0.84
+                        0 0 0 0.18 0"
+                result="tint"
+              />
+              <feComposite in="tint" in2="SourceAlpha" operator="in" />
+            </filter>
           </defs>
 
           {/* Outer accent halo. Radius shrunk from 1.06× to 1.02× so the
@@ -1007,8 +1010,8 @@ export function Globe({
           <path
             ref={graticuleRef}
             fill="none"
-            stroke="color-mix(in srgb, var(--text) 14%, transparent)"
-            strokeWidth="0.6"
+            stroke="color-mix(in srgb, #d8efff 18%, transparent)"
+            strokeWidth="0.5"
             pointerEvents="none"
           />
 
@@ -1020,6 +1023,16 @@ export function Globe({
              without a sub-pixel tap. */}
           {countryNodes}
 
+          {/* A clipped procedural grain gives the globe a more natural surface
+             without adding network tiles or changing country hit targets. */}
+          <path
+            ref={textureRef}
+            fill="#fff"
+            filter="url(#cb-earth-grain)"
+            opacity="0.34"
+            pointerEvents="none"
+          />
+
           {/* Specular shine */}
           <path
             ref={shineRef}
@@ -1029,28 +1042,6 @@ export function Globe({
           />
         </svg>
       )}
-
-      {projectionData ? (
-        <div className="cb-globe-controls" role="group" aria-label="Globe controls">
-          <button type="button" className="cb-globe-control" onClick={() => zoomBy(1 / ZOOM_STEP)} aria-label="Zoom out" title="Zoom out">
-            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
-              <line x1="4" y1="9" x2="14" y2="9" />
-            </svg>
-          </button>
-          <button type="button" className="cb-globe-control" onClick={resetView} aria-label="Reset globe view" title="Reset view">
-            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M14.2 7.1a5.4 5.4 0 1 0 .3 4.1" />
-              <path d="M14.4 3.8v3.4h-3.4" />
-            </svg>
-          </button>
-          <button type="button" className="cb-globe-control" onClick={() => zoomBy(ZOOM_STEP)} aria-label="Zoom in" title="Zoom in">
-            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
-              <line x1="4" y1="9" x2="14" y2="9" />
-              <line x1="9" y1="4" x2="9" y2="14" />
-            </svg>
-          </button>
-        </div>
-      ) : null}
     </div>
   )
 }

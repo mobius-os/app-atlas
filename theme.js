@@ -3,7 +3,7 @@
 export const CSS = `
 /* mobius-ui:NativeTouch v1 — keep in sync; library candidate. Diverge below the marker only. */
 * { -webkit-tap-highlight-color: transparent; }
-.cb-sheet-handle, .cb-detail-cta, .cb-detail-close, .cb-sheet-search-clear, .cb-row, .cb-globe-control {
+.cb-sheet-handle, .cb-detail-cta, .cb-detail-close, .cb-sheet-search-clear, .cb-row {
   touch-action: manipulation;
 }
 .cb-header, .cb-counter, .cb-pill, .cb-detail-flag, .cb-row-flag {
@@ -14,16 +14,14 @@ export const CSS = `
 .cb-detail-body { overscroll-behavior: contain; }
 .cb-sheet-search input { font-size: 16px; }
 @media (hover: hover) {
-  .cb-country:hover { fill: var(--cb-land-hover); }
+  .cb-country:not(.cb-country--visited):not(.cb-country--wishlist):not(.cb-country--selected):hover {
+    fill: var(--cb-land-hover);
+  }
   .cb-row:hover {
     background: color-mix(in srgb, var(--surface2, var(--surface)) 80%, transparent);
   }
   .cb-sheet-search-clear:hover { color: var(--text); }
   .cb-detail-close:hover {
-    background: var(--surface2, var(--surface));
-    color: var(--text);
-  }
-  .cb-globe-control:hover {
     background: var(--surface2, var(--surface));
     color: var(--text);
   }
@@ -44,9 +42,9 @@ export const CSS = `
      stable atlas identity while mixing in the active theme background so
      standalone installs and shell embeds do not feel like different apps.
      Keep these hardcoded hex; everything else rides the theme tokens. */
-  --cb-ocean-1: color-mix(in srgb, #3f8cff 88%, var(--bg) 12%);
-  --cb-ocean-2: color-mix(in srgb, #1764c7 92%, var(--bg) 8%);
-  --cb-ocean-3: color-mix(in srgb, #0b2f73 94%, var(--bg) 6%);
+  --cb-ocean-1: color-mix(in srgb, #5aa7d8 76%, var(--bg) 24%);
+  --cb-ocean-2: color-mix(in srgb, #186cae 82%, var(--bg) 18%);
+  --cb-ocean-3: color-mix(in srgb, #082a5d 92%, var(--bg) 8%);
   /* /mobius-ui:identity-palette */
   /* Specular shine — a soft highlight. Mixing with literal white
      read OK on dark themes but flat-out vanished into the page on
@@ -54,8 +52,8 @@ export const CSS = `
      lighter than the underlying surface in every theme. The
      accent tint keeps the globe feeling planet-shaped rather
      than just paler-than-its-frame. */
-  --cb-shine-1: color-mix(in srgb, #ffffff 38%, transparent);
-  --cb-shine-2: color-mix(in srgb, #ffffff 12%, transparent);
+  --cb-shine-1: color-mix(in srgb, #ffffff 30%, transparent);
+  --cb-shine-2: color-mix(in srgb, #d8efff 13%, transparent);
   --cb-shine-3: transparent;
   --cb-surface: color-mix(in srgb, var(--surface) 82%, transparent);
   /* --surface2 isn't guaranteed by every Möbius theme; fall back
@@ -63,17 +61,17 @@ export const CSS = `
      define the deeper surface token. */
   --cb-surface-strong: color-mix(in srgb, var(--surface2, var(--surface)) 92%, transparent);
   --cb-border: var(--border);
-  --cb-land-fill: color-mix(in srgb, #d7c49a 72%, var(--surface) 28%);
-  --cb-land-hover: color-mix(in srgb, #e5d4aa 78%, var(--text) 22%);
-  --cb-land-stroke: color-mix(in srgb, #24333b 74%, var(--bg) 26%);
-  /* Visited stays recognizably green, but is tempered with the active
-     accent + land fill so a map with many stamps does not wash the whole
-     screenshot into one green cast. */
-  --cb-visited-base: color-mix(in srgb, var(--green, #27ae60) 74%, var(--accent) 26%);
-  --cb-visited-fill: color-mix(in srgb, var(--cb-visited-base) 78%, var(--cb-land-fill) 22%);
-  --cb-visited-stroke: color-mix(in srgb, #d9ffe7 72%, var(--bg) 28%);
+  --cb-land-fill: color-mix(in srgb, #c7b98f 82%, var(--surface) 18%);
+  --cb-land-hover: color-mix(in srgb, #d8c99d 82%, var(--text) 18%);
+  --cb-land-stroke: color-mix(in srgb, #24333b 62%, var(--bg) 38%);
+  /* Status colours are overlays, not alternate terrain. The fill mixes status
+     back into the same neutral land, so the procedural world texture remains
+     visible and unvisited countries never look accidentally marked. */
+  --cb-visited-base: color-mix(in srgb, var(--green, #27ae60) 78%, var(--accent) 22%);
+  --cb-visited-fill: color-mix(in srgb, var(--cb-visited-base) 48%, var(--cb-land-fill) 52%);
+  --cb-visited-stroke: color-mix(in srgb, var(--cb-visited-base) 58%, var(--cb-land-stroke) 42%);
   --cb-wishlist: color-mix(in srgb, #f39c12 88%, var(--cb-land-fill) 12%);
-  --cb-wishlist-fill: color-mix(in srgb, var(--cb-wishlist) 82%, var(--cb-land-fill) 18%);
+  --cb-wishlist-fill: color-mix(in srgb, var(--cb-wishlist) 54%, var(--cb-land-fill) 46%);
   /* Selected fill: the theme accent brightened with literal white — NOT
      --text, which flips dark on light themes and would read as shadow
      instead of highlight. The white lift keeps it clearly lighter than
@@ -291,6 +289,20 @@ export const CSS = `
   flex: 1 1 auto;
   min-height: 0;
   position: relative;
+  overflow: hidden;
+}
+.cb-globe-shell::before {
+  content: '';
+  position: absolute;
+  inset: 4% 0 10%;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 50% 42%,
+      color-mix(in srgb, var(--accent) 12%, transparent) 0%,
+      color-mix(in srgb, #55c7ff 8%, transparent) 34%,
+      transparent 68%);
+  filter: blur(14px);
+  opacity: 0.8;
 }
 .cb-globe-canvas {
   position: absolute;
@@ -304,39 +316,6 @@ export const CSS = `
   width: 100%;
   height: 100%;
   display: block;
-}
-.cb-globe-controls {
-  position: absolute;
-  left: max(14px, env(safe-area-inset-left));
-  bottom: max(14px, env(safe-area-inset-bottom));
-  z-index: 3;
-  display: inline-flex;
-  gap: 6px;
-  padding: 4px;
-  border-radius: 12px;
-  border: 1px solid var(--cb-border);
-  background: color-mix(in srgb, var(--surface) 82%, transparent);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  box-shadow: 0 4px 8px color-mix(in srgb, var(--text) 12%, transparent);
-}
-.cb-globe-control {
-  width: 44px;
-  height: 44px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-  transition: background 140ms ease, color 140ms ease, transform 90ms ease;
-}
-.cb-globe-control:active {
-  transform: scale(0.94);
-  background: color-mix(in srgb, var(--surface2, var(--surface)) 76%, transparent);
 }
 /* Suppress the outline only for mouse/touch focus; the shared Focus
    block below still paints a ring for keyboard (:focus-visible) users. */
@@ -376,7 +355,7 @@ export const CSS = `
 .cb-country {
   fill: var(--cb-land-fill);
   stroke: var(--cb-land-stroke);
-  stroke-width: 0.62;
+  stroke-width: 0.48;
   opacity: 1;
   transition: fill 180ms ease, stroke 180ms ease, opacity 180ms ease;
   cursor: pointer;
@@ -387,12 +366,12 @@ export const CSS = `
      vanished the outline on light themes. Mix with --bg so the
      border keeps separation from the ocean in every theme. */
   stroke: var(--cb-visited-stroke);
-  stroke-width: 0.74;
+  stroke-width: 0.64;
 }
 .cb-country--wishlist {
   fill: var(--cb-wishlist-fill);
-  stroke: color-mix(in srgb, var(--cb-wishlist) 70%, var(--bg) 30%);
-  stroke-width: 0.74;
+  stroke: color-mix(in srgb, var(--cb-wishlist) 58%, var(--cb-land-stroke) 42%);
+  stroke-width: 0.64;
 }
 .cb-country--selected {
   /* Selection highlights the TERRITORY, never its boundary. A stroke-based
@@ -625,11 +604,10 @@ export const CSS = `
   flex: 1 1 auto;
   min-height: 0;
 }
-/* Detail view — shown while a country is selected. Three bands: a fixed
-   condensed header, a single scrollable body, and a pinned action bar. The
-   detail itself does NOT scroll (only .cb-detail-body does), so the header and
-   CTAs never leave the screen and nothing clips at any sheet height. Kept
-   mounted at all times so toggling back to the list never resets scrollTop. */
+/* Detail view — shown while a country is selected. It deliberately keeps the
+   same sheet height the list had, so tapping a country never shrinks the globe.
+   The content is dense: a compact header, a tight fact grid, and a small pinned
+   action bar. */
 .cb-detail {
   display: flex;
   flex-direction: column;
@@ -637,33 +615,35 @@ export const CSS = `
   min-height: 0;
   overflow: hidden; /* the body scrolls, not the shell */
 }
-/* Condensed header — pinned at the top of the detail. A hairline divider sets
-   it off from the scrolling facts; the negative-free padding keeps the flag,
-   name and close on one tidy 56px-ish row that survives the shortest sheet. */
+/* Condensed header — pinned at the top of the detail. */
 .cb-detail-head {
   flex-shrink: 0;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 12px;
-  padding: 6px 16px 12px;
-  border-bottom: 1px solid color-mix(in srgb, var(--cb-border) 70%, transparent);
+  gap: 10px;
+  padding: 4px 14px 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--cb-border) 54%, transparent);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--surface2, var(--surface)) 34%, transparent),
+    transparent
+  );
 }
 .cb-detail-flag {
-  /* Smaller than the old 40px block: the header is a label now, not a hero, so
-     the facts below get the room. */
-  font-size: 30px;
+  font-size: 25px;
   line-height: 1;
+  filter: drop-shadow(0 2px 5px color-mix(in srgb, var(--text) 18%, transparent));
 }
 .cb-detail-name {
   min-width: 0; /* let the name ellipsize instead of pushing the close button off */
 }
 .cb-detail-name strong {
   display: block;
-  font-size: 18px;
+  font-size: 17px;
   font-weight: 600;
   color: var(--text);
-  line-height: 1.2;
+  line-height: 1.15;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -671,16 +651,16 @@ export const CSS = `
 .cb-detail-name small {
   display: block;
   margin-top: 2px;
-  font-size: 12px;
+  font-size: 11.5px;
   color: var(--muted);
   letter-spacing: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* The one scrolling region. Sits between the fixed header and the pinned
-   action bar; only this band overflows, so the facts can grow without
-   clipping and without dragging the CTAs off-screen. */
+/* The one scrolling region. At the default collapsed height it fits the normal
+   four facts without forcing the globe smaller; if a country has unusually long
+   language text, this narrow band scrolls instead of expanding the sheet. */
 .cb-detail-body {
   flex: 1 1 auto;
   min-height: 0;
@@ -689,12 +669,10 @@ export const CSS = `
   overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 14px 16px;
+  gap: 8px;
+  padding: 8px 14px;
 }
-/* Basic-info card (Change 6) — a definition list of capital / population /
-   surface area / languages. Label muted, value in --text; rows separated by a
-   hairline so the four facts read as a tidy table without heavy borders. */
+/* Basic-info card — dense 2x2 fact grid. */
 .cb-info {
   margin: 0;
   /* Don't let the flex body squeeze the facts card: when the sheet is dragged
@@ -702,40 +680,46 @@ export const CSS = `
      keeps the card at its natural height so .cb-detail-body overflows (and
      scrolls) instead of clipping the rows. */
   flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  border: 1px solid var(--cb-border);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--surface) 50%, transparent);
-  overflow: hidden;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
 }
 .cb-info-row {
-  display: grid;
-  grid-template-columns: minmax(0, auto) minmax(0, 1fr);
-  align-items: baseline;
-  gap: 14px;
-  padding: 10px 14px;
-}
-.cb-info-row + .cb-info-row {
-  border-top: 1px solid color-mix(in srgb, var(--cb-border) 60%, transparent);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  min-height: 42px;
+  padding: 6px 9px;
+  border: 1px solid color-mix(in srgb, var(--cb-border) 58%, transparent);
+  border-radius: 10px;
+  background:
+    linear-gradient(145deg,
+      color-mix(in srgb, var(--surface2, var(--surface)) 64%, transparent),
+      color-mix(in srgb, var(--surface) 42%, transparent));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #ffffff 5%, transparent);
 }
 .cb-info-row dt {
-  font-size: 12px;
+  font-size: 10.5px;
   letter-spacing: 0;
   color: var(--muted);
 }
 .cb-info-row dd {
   margin: 0;
-  font-size: 14px;
-  font-weight: 500;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.15;
   color: var(--text);
-  text-align: right;
+  text-align: left;
   /* Numeric facts (population/area) align as derived stats, matching the
      counter chip's tabular treatment. */
   font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
   word-break: break-word;
 }
 .cb-detail-close {
+  width: 44px;
   min-width: 44px;
   min-height: 44px;
   display: grid;
@@ -750,9 +734,9 @@ export const CSS = `
 }
 .cb-detail-cta {
   min-height: 44px;
-  padding: 0 14px;
-  border-radius: 12px;
-  font-size: 15px;
+  padding: 0 12px;
+  border-radius: 10px;
+  font-size: 14px;
   font-weight: 600;
   letter-spacing: 0;
   background: color-mix(in srgb, var(--surface2, var(--surface)) 88%, transparent);
@@ -769,10 +753,13 @@ export const CSS = `
   flex-shrink: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 10px;
-  padding: 12px 16px max(14px, env(safe-area-inset-bottom));
-  border-top: 1px solid color-mix(in srgb, var(--cb-border) 70%, transparent);
-  background: color-mix(in srgb, var(--cb-surface-strong) 70%, transparent);
+  gap: 8px;
+  padding: 8px 14px max(8px, env(safe-area-inset-bottom));
+  border-top: 1px solid color-mix(in srgb, var(--cb-border) 54%, transparent);
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--cb-surface-strong) 42%, transparent),
+      color-mix(in srgb, var(--cb-surface-strong) 76%, transparent));
 }
 .cb-detail-cta:active {
   transform: scale(0.985);

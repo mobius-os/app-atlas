@@ -132,15 +132,6 @@ export function BottomSheet({
     return () => clearTimeout(id)
   }, [query, countries.length])
 
-  // Opening a country must NOT resize the sheet (owner feedback: the panel
-  // jumped when you tapped a country). There is deliberately no auto-lift on
-  // selection — the sheet stays at whatever height it's at, and the detail
-  // view fits within that band: a fixed header + pinned action bar frame a
-  // single scrolling body (see .cb-detail-body overflow-y:auto), so the facts
-  // scroll internally while the name and CTAs stay put and nothing clips. The
-  // user can still drag the handle up for more room; tapping a country just
-  // never moves it for them.
-
   const minFrac = SHEET_MIN
   const stops = SHEET_STOPS_DEFAULT
 
@@ -267,7 +258,7 @@ export function BottomSheet({
     ? [
         { key: 'capital', label: 'Capital', value: selectedInfo.capital || '—' },
         { key: 'population', label: 'Population', value: formatPopulation(selectedInfo.population) },
-        { key: 'area', label: 'Surface area', value: formatArea(selectedInfo.area) },
+        { key: 'area', label: 'Area', value: formatArea(selectedInfo.area) },
         { key: 'languages', label: 'Languages', value: formatLanguages(selectedInfo.languages) },
       ]
     : []
