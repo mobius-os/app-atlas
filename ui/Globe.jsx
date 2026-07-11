@@ -42,6 +42,7 @@ export function Globe({
   onTapCountry,
   onTapOcean,
   onGeometryRepaired,
+  onInteract,
 }) {
   const containerRef = useRef(null)
   const sphereRef = useRef(null)
@@ -699,6 +700,7 @@ export function Globe({
         startDist: pinchSpread(pointersRef.current) || 1,
         startZoom: zoomRef.current,
       }
+      onInteract?.('zoom') // pinch-to-zoom gesture opened
     } else {
       // Drag-rotate is only promoted to "moving" after the tap threshold in
       // onPointerMove. A plain country tap should not trigger a projection
@@ -739,6 +741,7 @@ export function Globe({
       if (Math.hypot(dx, dy) <= TAP_MOVE_PX) return
       dragRef.current.moved = true
       setSpinningBoth(true)
+      onInteract?.('drag') // a real drag-to-rotate began (past the tap threshold)
     }
 
     // Versor drag: solve the rotation that carries the point first grabbed to
@@ -905,6 +908,7 @@ export function Globe({
     const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 240 : 1
     const delta = clamp((event.deltaY || 0) * unit, -480, 480)
     zoomBy(Math.exp(-delta * 0.0012))
+    onInteract?.('zoom') // wheel / trackpad zoom
   }
 
   // Keyboard zoom — +/- (and =, the unshifted +) when the globe has focus.
@@ -913,9 +917,11 @@ export function Globe({
     if (event.key === '+' || event.key === '=') {
       event.preventDefault()
       zoomBy(ZOOM_STEP)
+      onInteract?.('zoom') // keyboard zoom in
     } else if (event.key === '-') {
       event.preventDefault()
       zoomBy(1 / ZOOM_STEP)
+      onInteract?.('zoom') // keyboard zoom out
     }
   }
 

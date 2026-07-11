@@ -52,6 +52,12 @@ function emitSignal(name, payload) {
   window.mobius?.signal?.(name, payload)
 }
 
+// globe_interacted throttle: a drag or wheel gesture fires its handler many
+// times per second, but the signal only needs to answer "is the globe used,
+// and in which mode" — not count frames. Coalesce to at most one signal per
+// kind per window so a continuous gesture burst lands as a single event.
+const GLOBE_INTERACT_THROTTLE_MS = 5000
+
 export { bindUseDocument } from './storage.js'
 export {
   PREF_KEY,
@@ -549,6 +555,21 @@ export default function Atlas({ appId, token }) {
     })
   }, [])
 
+  // globe_interacted (Reflection) — the one globe-usage signal. Without it there
+  // is no way to tell whether the 3D globe (by far the app's most expensive
+  // feature) actually earns its complexity or the partner only touches the list.
+  // Globe reports raw interaction kinds ('drag' | 'zoom'); we throttle per kind
+  // (see GLOBE_INTERACT_THROTTLE_MS) so a continuous drag/wheel stream emits one
+  // signal per gesture-burst, not one per frame. Flat payload, no PII.
+  const lastGlobeInteractRef = useRef({})
+  const reportGlobeInteract = useCallback((kind) => {
+    if (kind !== 'drag' && kind !== 'zoom') return
+    const now = Date.now()
+    if (now - (lastGlobeInteractRef.current[kind] || 0) < GLOBE_INTERACT_THROTTLE_MS) return
+    lastGlobeInteractRef.current[kind] = now
+    emitSignal('globe_interacted', { kind })
+  }, [])
+
   const selectedCountry = useMemo(
     () => (selectedIso3 ? countries.find((c) => c.iso3 === selectedIso3) || null : null),
     [countries, selectedIso3],
@@ -628,6 +649,7 @@ export default function Atlas({ appId, token }) {
             onTapCountry={selectCountry}
             onTapOcean={deselect}
             onGeometryRepaired={reportGeometryRepair}
+            onInteract={reportGlobeInteract}
           />
         )}
       </div>
