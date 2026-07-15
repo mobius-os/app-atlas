@@ -35,6 +35,7 @@ const FILTER_CHIPS = [
   {
     id: 'all',
     label: 'Show all countries',
+    shortLabel: 'All',
     icon: (
       <svg
         width="18"
@@ -56,6 +57,7 @@ const FILTER_CHIPS = [
   {
     id: 'visited',
     label: 'Show visited only',
+    shortLabel: 'Been',
     icon: (
       <svg
         width="18"
@@ -76,6 +78,7 @@ const FILTER_CHIPS = [
   {
     id: 'wishlist',
     label: 'Show wishlist only',
+    shortLabel: 'Wishlist',
     icon: (
       <svg
         width="18"
@@ -93,6 +96,46 @@ const FILTER_CHIPS = [
     ),
   },
 ]
+
+// Status marks are SVG rather than font glyphs. The star/check characters used
+// to fall back to square tofu in some browsers even though the filter bar's
+// icons rendered correctly; one vector shape now stays crisp in every host.
+function StatusCheckIcon({ size = 16 }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 18 18"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <polyline points="3.2,9.6 7.2,13.4 14.8,4.8" />
+    </svg>
+  )
+}
+
+function StatusStarIcon({ size = 18, filled = false }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 18 18"
+      fill={filled ? 'currentColor' : 'none'}
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d="M9 2.4 L10.9 6.7 15.6 7.2 12.1 10.4 13.1 15 9 12.5 4.9 15 5.9 10.4 2.4 7.2 7.1 6.7 Z" />
+    </svg>
+  )
+}
 
 export function BottomSheet({
   countries,
@@ -369,7 +412,8 @@ export function BottomSheet({
                 onClick={() => onToggleVisited(selectedCountry)}
                 aria-pressed={isVisitedSelected}
               >
-                {isVisitedSelected ? 'Been ✓' : 'Been'}
+                <span>Been</span>
+                {isVisitedSelected ? <StatusCheckIcon /> : null}
               </button>
               <button
                 type="button"
@@ -377,7 +421,8 @@ export function BottomSheet({
                 onClick={() => onToggleWishlist(selectedCountry)}
                 aria-pressed={isWishlistedSelected}
               >
-                {isWishlistedSelected ? 'Want to go ★' : 'Want to go'}
+                <span>Want to go</span>
+                {isWishlistedSelected ? <StatusStarIcon size={15} filled /> : null}
               </button>
             </div>
           </>
@@ -439,9 +484,10 @@ export function BottomSheet({
             ) : null}
           </div>
 
-          {/* Status filter — icon-only segmented control beside the search
-              box. Filters the list (and dims non-matching countries on the
-              globe); the choice persists per-device via prefWrite. */}
+          {/* Status filter — compact icons beside search on phones, labeled
+              segmented choices below it in the desktop sidebar. It filters the
+              list (and dims non-matching countries on the globe); the choice
+              persists per-device via prefWrite. */}
           <div className="cb-filters" role="group" aria-label="Filter countries by status">
             {FILTER_CHIPS.map((chip) => (
               <button
@@ -454,6 +500,7 @@ export function BottomSheet({
                 onClick={() => onFilterChange(chip.id)}
               >
                 {chip.icon}
+                <span className="cb-filter-label">{chip.shortLabel}</span>
               </button>
             ))}
           </div>
@@ -513,32 +560,29 @@ export function BottomSheet({
               return (
                 <div
                   key={country.iso3}
-                  role="button"
-                  tabIndex={0}
-                  aria-label={`Open ${country.displayName}`}
                   className={
                     'cb-row' +
                     (isVisited ? ' cb-row--visited' : '') +
                     (isWishlisted ? ' cb-row--wishlist' : '')
                   }
-                  onClick={() => onSelect(country)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault()
-                      onSelect(country)
-                    }
-                  }}
                 >
-                  <span className="cb-row-flag" aria-hidden="true">
-                    {country.flag || '🏳️'}
-                  </span>
-                  <span className="cb-row-text">
-                    <strong>{country.displayName}</strong>
-                    <small>
-                      {country.region || 'World'}
-                      {country.subregion ? ` · ${country.subregion}` : ''}
-                    </small>
-                  </span>
+                  <button
+                    type="button"
+                    className="cb-row-open"
+                    aria-label={`Open ${country.displayName}`}
+                    onClick={() => onSelect(country)}
+                  >
+                    <span className="cb-row-flag" aria-hidden="true">
+                      {country.flag || '🏳️'}
+                    </span>
+                    <span className="cb-row-text">
+                      <strong>{country.displayName}</strong>
+                      <small>
+                        {country.region || 'World'}
+                        {country.subregion ? ` · ${country.subregion}` : ''}
+                      </small>
+                    </span>
+                  </button>
                   {/* Two one-tap status toggles per row (Change 5): the green
                       ring = 'Been', the star = 'Want to go'. Both stop
                       propagation so they mark without opening the detail.
@@ -558,7 +602,9 @@ export function BottomSheet({
                         onToggleWishlist(country)
                       }}
                     >
-                      <span aria-hidden="true">{isWishlisted ? '★' : '☆'}</span>
+                      <span aria-hidden="true">
+                        <StatusStarIcon filled={isWishlisted} />
+                      </span>
                     </button>
                     <button
                       type="button"
@@ -573,7 +619,9 @@ export function BottomSheet({
                         onToggleVisited(country)
                       }}
                     >
-                      <span aria-hidden="true">{isVisited ? '✓' : ''}</span>
+                      <span aria-hidden="true">
+                        {isVisited ? <StatusCheckIcon size={15} /> : null}
+                      </span>
                     </button>
                   </span>
                 </div>

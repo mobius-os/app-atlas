@@ -527,12 +527,18 @@ export function Globe({
   const projectionData = useMemo(() => {
     if (!ready || !d3Ref.current || !size.width || !size.height) return null
     const d3 = d3Ref.current
-    // Base radius — 52% of the smaller dim makes the default globe read as the
-    // hero of the screen (it was 46%, sized for the old half-height list; with
-    // the list now collapsed by default the globe has the room to be bigger).
+    // Base radius — the phone composition deliberately lets the globe run a
+    // touch beyond its short canvas (52% of the smaller dimension), which makes
+    // it feel like the hero above the sheet. A landscape web panel needs a
+    // complete, composed sphere instead: 49% leaves just enough room for the
+    // 1.02x halo without clipping it against the card edge. Derive the pose from
+    // the canvas aspect ratio rather than the viewport, so narrow split-screen
+    // embeds keep the phone behaviour and wide standalone views fit naturally.
+    const isLandscapePanel = size.width > size.height * 1.15
+    const baseRadius = isLandscapePanel ? 0.49 : 0.52
     // zoom (a multiplier) scales it; the radius below is the *visible* radius,
     // so the halo/sphere geometry tracks the zoom too.
-    const radius = Math.min(size.width, size.height) * 0.52 * zoom
+    const radius = Math.min(size.width, size.height) * baseRadius * zoom
     const projection = d3
       .geoOrthographic()
       .translate([size.width / 2, size.height / 2])
