@@ -509,6 +509,8 @@ export function BottomSheet({
         <div
           className="cb-list"
           ref={scrollRef}
+          tabIndex={0}
+          aria-label="Countries"
           onPointerDown={onBodyDown}
           onPointerMove={onBodyMove}
           onPointerUp={onBodyUp}

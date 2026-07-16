@@ -8,3 +8,8 @@ test('country rows use sibling native buttons instead of nested interactive cont
   assert.match(bottomSheetSource, /className="cb-row-open"/)
   assert.doesNotMatch(bottomSheetSource, /role="button"/)
 })
+
+test('the scrollable country list is reachable by keyboard even when empty', () => {
+  assert.match(bottomSheetSource, /className="cb-list"[\s\S]*?tabIndex=\{0\}/)
+  assert.match(bottomSheetSource, /className="cb-list"[\s\S]*?aria-label="Countries"/)
+})
