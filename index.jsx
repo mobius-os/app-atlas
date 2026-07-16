@@ -271,22 +271,28 @@ export default function Atlas({ appId, token }) {
     [appId, countries, query, visited, wishlist],
   )
 
-  // Surface a durable-write failure. doc.update REJECTS on a dead-letter (a
-  // fatal 4xx the server refused) and sets doc.lastError; we must not let that
-  // read as "saved". The toggle handlers catch the rejection to set this, and
-  // we also watch lastError so a refused background reconcile shows too. A
-  // transient/offline write is NOT an error — it queues durably and drains
-  // later (status==='saving' drives the SyncPill), so only a real dead-letter
-  // lands here.
+  // Surface a durable-write failure. doc.lastError is shared by reads AND
+  // writes, so a generic transport/read hiccup must never become a misleading
+  // "couldn't save" banner. Only the runtime's explicit dead_letter error means
+  // a background write was fatally refused. Direct toggle rejections are still
+  // caught at their call sites below. Once both documents recover to ready,
+  // clear any stale warning left by the failed attempt.
   const [writeError, setWriteError] = useState('')
   useEffect(() => {
     const err = visitedDoc.lastError || wishlistDoc.lastError
-    if (err) {
+    if (err?.code === 'dead_letter') {
       setWriteError(
         "Couldn't save your change — it was rejected. Your other taps are safe; try again.",
       )
+    } else if (visitedDoc.status === 'ready' && wishlistDoc.status === 'ready') {
+      setWriteError('')
     }
-  }, [visitedDoc.lastError, wishlistDoc.lastError])
+  }, [
+    visitedDoc.lastError,
+    visitedDoc.status,
+    wishlistDoc.lastError,
+    wishlistDoc.status,
+  ])
 
   const visitedCount = visited.size
   const totalCount = countries.length
@@ -636,39 +642,45 @@ export default function Atlas({ appId, token }) {
         </div>
       ) : null}
 
-      <div className="cb-globe-shell">
-        {loading ? (
-          <div className="cb-globe-loading">Loading the world…</div>
-        ) : (
-          <Globe
-            countries={countries}
-            visited={visited}
-            wishlist={wishlist}
-            selectedIso3={selectedIso3}
-            statusFilter={statusFilter}
-            onTapCountry={selectCountry}
-            onTapOcean={deselect}
-            onGeometryRepaired={reportGeometryRepair}
-            onInteract={reportGlobeInteract}
-          />
-        )}
-      </div>
+      {/* One workspace, two responsive poses: the phone keeps the draggable
+          list over the lower edge of the globe; wide web views turn that same
+          list into a full-height sidebar. Keeping both surfaces inside one
+          wrapper lets CSS make the change without duplicating any behaviour. */}
+      <main className="cb-workspace">
+        <div className="cb-globe-shell">
+          {loading ? (
+            <div className="cb-globe-loading">Loading the world…</div>
+          ) : (
+            <Globe
+              countries={countries}
+              visited={visited}
+              wishlist={wishlist}
+              selectedIso3={selectedIso3}
+              statusFilter={statusFilter}
+              onTapCountry={selectCountry}
+              onTapOcean={deselect}
+              onGeometryRepaired={reportGeometryRepair}
+              onInteract={reportGlobeInteract}
+            />
+          )}
+        </div>
 
-      <BottomSheet
-        countries={filteredCountries}
-        visited={visited}
-        wishlist={wishlist}
-        selectedCountry={selectedCountry}
-        query={query}
-        statusFilter={statusFilter}
-        loading={loading}
-        onQueryChange={setQuery}
-        onFilterChange={changeStatusFilter}
-        onSelect={selectCountry}
-        onToggleVisited={toggleVisited}
-        onToggleWishlist={toggleWishlist}
-        onDeselect={deselect}
-      />
+        <BottomSheet
+          countries={filteredCountries}
+          visited={visited}
+          wishlist={wishlist}
+          selectedCountry={selectedCountry}
+          query={query}
+          statusFilter={statusFilter}
+          loading={loading}
+          onQueryChange={setQuery}
+          onFilterChange={changeStatusFilter}
+          onSelect={selectCountry}
+          onToggleVisited={toggleVisited}
+          onToggleWishlist={toggleWishlist}
+          onDeselect={deselect}
+        />
+      </main>
     </div>
   )
 }

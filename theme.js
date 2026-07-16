@@ -3,7 +3,7 @@
 export const CSS = `
 /* mobius-ui:NativeTouch v1 — keep in sync; library candidate. Diverge below the marker only. */
 * { -webkit-tap-highlight-color: transparent; }
-.cb-sheet-handle, .cb-detail-cta, .cb-detail-close, .cb-sheet-search-clear, .cb-row {
+.cb-sheet-handle, .cb-detail-cta, .cb-detail-close, .cb-sheet-search-clear, .cb-row-open {
   touch-action: manipulation;
 }
 .cb-header, .cb-counter, .cb-pill, .cb-detail-flag, .cb-row-flag {
@@ -193,13 +193,12 @@ export const CSS = `
 @media (min-height: 760px) {
   .cb-header h1 { font-size: 20px; }
 }
-/* Wide screen: the bottom sheet doesn't really make sense, but
-   since this is mobile-first we keep the layout consistent and
-   just let the sheet sit at the bottom. The globe gets a bit of
-   breathing room. */
+/* Tablet spacing. The actual desktop workspace switch lives beside the
+   workspace styles below, where the map and country panel can be read as one
+   responsive component rather than unrelated header overrides. */
 @media (min-width: 720px) {
   .cb-header {
-    padding: max(18px, env(safe-area-inset-top)) 24px 10px;
+    padding: max(18px, env(safe-area-inset-top)) 24px 12px;
   }
 }
 @media (max-width: 430px) {
@@ -283,6 +282,17 @@ export const CSS = `
   background: color-mix(in srgb, var(--text) 50%, transparent);
 }
 /* /mobius-ui:SyncPill */
+
+/* Atlas workspace. Mobile keeps the original vertical globe + draggable
+   bottom-sheet composition. At desktop width it becomes a map workspace with
+   a persistent country sidebar, so search, filters, and the list are visible
+   without dragging a phone control across a large web canvas. */
+.cb-workspace {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
 
 /* mobius-ui:Globe v1 — keep in sync; library candidate. Diverge below the marker only. */
 .cb-globe-shell {
@@ -588,6 +598,9 @@ export const CSS = `
   border-color: color-mix(in srgb, var(--accent) 55%, transparent);
   color: var(--accent);
 }
+.cb-filter-label {
+  display: none;
+}
 @media (hover: hover) {
   .cb-filter:hover { color: var(--text); }
   .cb-filter.is-on:hover { color: var(--accent); }
@@ -739,6 +752,10 @@ export const CSS = `
 .cb-detail-cta {
   min-height: 44px;
   padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
   border-radius: 10px;
   font-size: 14px;
   font-weight: 600;
@@ -828,27 +845,42 @@ export const CSS = `
 }
 /* /mobius-ui:Empty */
 .cb-row {
-  /* Min-height enforces a 44px tap target without needing to
-     pad the row visually — the grid keeps content centred. */
   width: 100%;
   min-height: 56px;
-  display: grid;
-  grid-template-columns: 30px 1fr auto;
+  display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 8px 14px;
+  padding: 0 4px 0 0;
   margin-bottom: 6px;
   border: 1px solid transparent;
   border-radius: 12px;
   background: color-mix(in srgb, var(--surface) 60%, transparent);
   color: var(--text);
+  transition: background 160ms ease, border-color 160ms ease;
+}
+.cb-row-open {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 56px;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0 8px 14px;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  color: inherit;
   font: inherit;
   text-align: left;
   cursor: pointer;
-  transition: background 160ms ease, border-color 160ms ease, transform 120ms ease;
+  transition: transform 120ms ease;
 }
-.cb-row:active {
+.cb-row-open:active {
   transform: scale(0.995);
+}
+.cb-row-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 .cb-row-flag {
   font-size: 22px;
@@ -898,6 +930,11 @@ export const CSS = `
 .cb-row-want--on {
   color: var(--cb-wishlist);
 }
+.cb-row-want svg {
+  display: block;
+  width: 20px;
+  height: 20px;
+}
 .cb-row-want:active { transform: scale(0.88); }
 @media (hover: hover) {
   .cb-row-want:hover { color: var(--cb-wishlist); }
@@ -936,6 +973,11 @@ export const CSS = `
   line-height: 1;
   transition: background 0.12s, border-color 0.12s, transform 0.08s;
 }
+.cb-row-mark svg {
+  display: block;
+  width: 15px;
+  height: 15px;
+}
 .cb-row-mark--on > span {
   background: var(--cb-visited-fill, var(--accent));
   border-color: var(--cb-visited-fill, var(--accent));
@@ -968,6 +1010,152 @@ export const CSS = `
   height: 0;
 }
 /* /mobius-ui:Scrollskin */
+
+/* Wide web workspace -------------------------------------------------------
+   The breakpoint intentionally leaves tablets and narrow split-screen windows
+   on the proven bottom-sheet UI. Once there is room for a real sidebar, the
+   map becomes the hero panel and every browsing control remains in view. */
+@media (min-width: 900px) {
+  .cb-app {
+    background:
+      radial-gradient(circle at 70% 42%,
+        color-mix(in srgb, var(--accent) 5%, transparent),
+        transparent 38%),
+      var(--bg);
+  }
+  .cb-header {
+    padding: max(20px, env(safe-area-inset-top)) 28px 16px;
+    border-bottom: 1px solid color-mix(in srgb, var(--cb-border) 55%, transparent);
+  }
+  .cb-brand {
+    gap: 12px;
+  }
+  .cb-brand-icon,
+  .cb-brand-fallback {
+    width: 38px;
+    height: 38px;
+    border-radius: 10px;
+  }
+  .cb-saying {
+    font-size: 16px;
+  }
+  .cb-banner,
+  .cb-error {
+    margin: 12px 28px 0;
+  }
+  .cb-workspace {
+    display: grid;
+    grid-template-columns: clamp(350px, 29vw, 430px) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    gap: 18px;
+    padding: 18px 24px 24px;
+  }
+  .cb-globe-shell {
+    grid-column: 2;
+    grid-row: 1;
+    border: 1px solid color-mix(in srgb, var(--cb-border) 72%, transparent);
+    border-radius: 22px;
+    background:
+      linear-gradient(145deg,
+        color-mix(in srgb, var(--surface) 24%, transparent),
+        color-mix(in srgb, var(--bg) 84%, transparent));
+    box-shadow:
+      inset 0 1px 0 color-mix(in srgb, #ffffff 5%, transparent),
+      0 18px 50px color-mix(in srgb, #000000 18%, transparent);
+  }
+  .cb-globe-shell::before {
+    inset: 2% 2% 4%;
+    opacity: 1;
+  }
+  .cb-sheet {
+    grid-column: 1;
+    grid-row: 1;
+    height: auto !important;
+    min-height: 0;
+    border: 1px solid color-mix(in srgb, var(--cb-border) 78%, transparent);
+    border-radius: 18px;
+    box-shadow:
+      inset 0 1px 0 color-mix(in srgb, #ffffff 5%, transparent),
+      0 14px 38px color-mix(in srgb, #000000 16%, transparent);
+    backdrop-filter: blur(18px);
+  }
+  .cb-sheet-handle {
+    display: none;
+  }
+  .cb-sheet-controls {
+    flex-direction: column;
+    margin: 14px 14px 12px;
+  }
+  .cb-filters {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+  .cb-filter {
+    width: auto;
+    padding: 0 10px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    font-family: var(--font);
+    font-size: 12px;
+    font-weight: 650;
+  }
+  .cb-filter-label {
+    display: inline;
+  }
+  .cb-sheet-search {
+    background: color-mix(in srgb, var(--surface) 88%, transparent);
+  }
+  .cb-list {
+    padding: 0 10px 14px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--cb-border) transparent;
+  }
+  .cb-list::-webkit-scrollbar,
+  .cb-detail-body::-webkit-scrollbar {
+    display: block;
+    width: 8px;
+    height: 8px;
+  }
+  .cb-list::-webkit-scrollbar-thumb,
+  .cb-detail-body::-webkit-scrollbar-thumb {
+    background: var(--cb-border);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  .cb-row {
+    min-height: 58px;
+    padding: 0 8px 0 0;
+    margin-bottom: 5px;
+    background: color-mix(in srgb, var(--surface) 72%, transparent);
+  }
+  .cb-row-open {
+    min-height: 58px;
+    padding-left: 12px;
+  }
+  .cb-detail-head {
+    padding: 16px 14px 12px;
+  }
+  .cb-detail-body {
+    padding: 14px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--cb-border) transparent;
+  }
+  .cb-info {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  .cb-info-row {
+    min-height: 54px;
+    padding: 9px 11px;
+  }
+  .cb-detail-actions {
+    padding: 12px 14px 14px;
+  }
+}
 
 /* mobius-ui:ReducedMotion v1 -- honor the OS reduce-motion setting */
 @media (prefers-reduced-motion: reduce) {
