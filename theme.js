@@ -476,7 +476,9 @@ export const CSS = `
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 14px;
+  min-height: 44px;
+  box-sizing: border-box;
+  padding: 0 6px 0 14px;
   border-radius: 12px;
   background: var(--cb-surface);
   border: 1px solid var(--cb-border);
@@ -495,6 +497,8 @@ export const CSS = `
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
+  align-self: stretch;
+  min-height: 44px;
   background: transparent;
   border: 0;
   color: var(--text);
@@ -532,9 +536,9 @@ export const CSS = `
   flex-shrink: 0;
   min-width: 44px;
   min-height: 44px;
-  /* The search pill is ~44px tall, so a 44px button fits without negative
-     margin; pull it 6px into the pill's right padding so it sits flush. */
-  margin: 0 -6px 0 0;
+  /* The pill has no vertical padding, so showing this button never changes
+     the row height. Its 44px hit target remains flush with the right edge. */
+  margin: 0;
   display: grid;
   place-items: center;
   padding: 0;
