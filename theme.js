@@ -288,10 +288,23 @@ export const CSS = `
    a persistent country sidebar, so search, filters, and the list are visible
    without dragging a phone control across a large web canvas. */
 .cb-workspace {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
+  /* Mobile/tablet (< the 900px desktop switch below): establish NO box of our
+     own so .cb-globe-shell and the bottom sheet stay direct flex children of
+     .cb-app, exactly as they were before this wrapper was introduced. This is
+     load-bearing for the sheet, not cosmetic: .cb-sheet's height is a CSS
+     percent set inline from frac, and BottomSheet's drag converts finger
+     movement to a frac delta using visualViewport.height (see ui/BottomSheet.jsx
+     — "we use visualViewport for *both* the displayed sheet height ... and the
+     drag conversion so the user's finger and the sheet edge stay aligned"). The
+     percent only equals real pixels — so the sheet edge tracks the finger — when
+     it resolves against the viewport. .cb-app is position:fixed/inset:0 (= the
+     viewport); a flex or grid box here would instead be the viewport MINUS the
+     header, shrinking every drag so the edge lags the finger. display:contents
+     removes this element's box while keeping it (and its desktop grid) in the
+     DOM, so the sheet's containing block is .cb-app again. The desktop workspace
+     re-establishes a real grid box below (a static sidebar, height:auto sheet,
+     no dragging — so the percent/drag invariant does not apply there). */
+  display: contents;
 }
 
 /* mobius-ui:Globe v1 — keep in sync; library candidate. Diverge below the marker only. */
@@ -1044,6 +1057,11 @@ export const CSS = `
     margin: 12px 28px 0;
   }
   .cb-workspace {
+    /* Now a real box: grow to fill the space under the header (flex child of
+       .cb-app) and lay the sidebar + globe out as a grid. flex/min-height moved
+       here from the base rule, which is display:contents on mobile. */
+    flex: 1 1 auto;
+    min-height: 0;
     display: grid;
     grid-template-columns: clamp(350px, 29vw, 430px) minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
