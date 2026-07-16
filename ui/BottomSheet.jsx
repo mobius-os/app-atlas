@@ -5,6 +5,7 @@ import {
   formatLanguages,
   formatPopulation,
   lookupCountryInfo,
+  shouldStartSheetBodyDrag,
 } from '../domain.js'
 
 // --------------------------------------------------------------------------
@@ -273,7 +274,7 @@ export function BottomSheet({
   // further, we treat that as a sheet drag.
   const onBodyDown = (event) => {
     const atTop = (scrollRef.current?.scrollTop || 0) <= 0
-    if (!atTop) return
+    if (!shouldStartSheetBodyDrag(atTop, event.target)) return
     startDrag(event, true)
   }
   const onBodyMove = (event) => {

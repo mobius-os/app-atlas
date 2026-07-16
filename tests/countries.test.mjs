@@ -28,6 +28,8 @@ import {
   pickRotatingSaying,
   prefRead,
   prefWrite,
+  SHEET_DRAG_INTERACTIVE_SELECTOR,
+  shouldStartSheetBodyDrag,
   solveVersorDrag,
   toggleCountryStatus,
 } from '../domain.js'
@@ -93,6 +95,20 @@ const countries = [
   { iso3: 'AAA', iso2: 'AA', displayName: 'Same Name', region: 'Tie' },
   { iso3: 'BBB', iso2: 'BB', displayName: 'Same Name', region: 'Tie' },
 ]
+
+test('sheet body drag leaves native country controls clickable at the top of the list', () => {
+  const interactiveTarget = {
+    closest(selector) {
+      assert.equal(selector, SHEET_DRAG_INTERACTIVE_SELECTOR)
+      return { tagName: 'BUTTON' }
+    },
+  }
+  const emptySpaceTarget = { closest: () => null }
+
+  assert.equal(shouldStartSheetBodyDrag(true, interactiveTarget), false)
+  assert.equal(shouldStartSheetBodyDrag(true, emptySpaceTarget), true)
+  assert.equal(shouldStartSheetBodyDrag(false, emptySpaceTarget), false)
+})
 
 test('orderCountriesForList orders alphabetically with an iso3 tiebreak', () => {
   const ordered = orderCountriesForList(countries)

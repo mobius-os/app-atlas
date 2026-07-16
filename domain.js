@@ -6,6 +6,27 @@ import { COUNTRY_FACTS } from './constants.js'
 const soften = (value) => String(value || '').toLowerCase().trim()
 export const clamp = (value, min, max) => Math.max(min, Math.min(max, value))
 
+// Pointer capture retargets pointer-up (and therefore click) to the element
+// holding capture. The country list may capture empty-space drags when it is
+// scrolled to the top, but it must leave native controls alone or a tap on a
+// country/status button becomes a zero-distance sheet drag instead of a click.
+export const SHEET_DRAG_INTERACTIVE_SELECTOR = [
+  'button',
+  'a[href]',
+  'input',
+  'textarea',
+  'select',
+  'summary',
+  '[role="button"]',
+  '[contenteditable="true"]',
+].join(',')
+
+export function shouldStartSheetBodyDrag(atTop, target) {
+  if (!atTop) return false
+  const interactive = target?.closest?.(SHEET_DRAG_INTERACTIVE_SELECTOR)
+  return !interactive
+}
+
 
 // Pick the saying index at random WITHOUT repeating the one on screen.
 // Returns -1 when the list is empty (the caller renders nothing) and stays put
