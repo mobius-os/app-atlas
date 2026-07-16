@@ -179,7 +179,7 @@ export const CSS = `
   /* Accent FILL → --accent-fg is the one legal foreground (no fallback hex):
      the shell themes it to a legible ink for the active accent, so a custom
      theme can't strand this glyph unreadable the way var(--bg) did. */
-  background: var(--accent);
+  background: var(--accent-hover, var(--accent));
   color: var(--accent-fg);
   font-weight: 700;
   line-height: 1;
