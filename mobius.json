@@ -1,13 +1,13 @@
 {
   "id": "atlas",
   "name": "Atlas",
-  "version": "1.9.12",
+  "version": "1.9.13",
   "description": "Spin the globe, tap the countries you've visited, and watch your map fill in.",
   "author": "mobius-os",
   "license": "MIT",
   "homepage": "https://github.com/mobius-os/app-atlas",
   "entry": "index.jsx",
-  "icon": "icon.png",
+  "icon": "icon-v2.png",
   "theme_color": "#101820",
   "background_color": "#101820",
   "offline_capable": true,
@@ -24,7 +24,9 @@
     "reads": true,
     "writes": "queued",
     "execution": "full",
-    "precache": ["countries.geo.json"]
+    "precache": [
+      "countries.geo.json"
+    ]
   },
   "runtime": {
     "imports": [

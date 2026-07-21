@@ -3,7 +3,6 @@
 Spin a 3D globe and mark the countries you've visited. Watch your map fill in as the count climbs toward 195. A [Möbius](https://github.com/mobius-os) mini-app.
 
 <!-- TODO: docs/screenshot.png after first install. -->
-<!-- TODO: icon.png — currently relying on Möbius's auto-generated letter icon. -->
 
 ## Install
 
