@@ -748,6 +748,26 @@ export const CSS = `
   overflow-wrap: anywhere;
   word-break: break-word;
 }
+.cb-boundary-note {
+  flex-shrink: 0;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--cb-border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+}
+.cb-boundary-note p {
+  margin: 0;
+  color: var(--text);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+.cb-boundary-note small {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.35;
+}
 .cb-detail-close {
   width: 44px;
   min-width: 44px;

@@ -399,6 +399,14 @@ export function BottomSheet({
                   ))}
                 </dl>
               ) : null}
+              {selectedCountry.boundaryNote ? (
+                <aside className="cb-boundary-note" aria-label="Boundary note">
+                  <p>{selectedCountry.boundaryNote}</p>
+                  {selectedCountry.boundarySource ? (
+                    <small>{selectedCountry.boundarySource}</small>
+                  ) : null}
+                </aside>
+              ) : null}
             </div>
 
             {/* Sticky action bar — two independent status toggles ('Been' /
