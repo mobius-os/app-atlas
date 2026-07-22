@@ -399,6 +399,32 @@ export function BottomSheet({
                   ))}
                 </dl>
               ) : null}
+              {selectedCountry.boundaryNote ? (
+                <aside className="cb-boundary-note" aria-label="Boundary note">
+                  <p>{selectedCountry.boundaryNote}</p>
+                  {selectedCountry.boundarySource ? (
+                    <small>
+                      Boundary:{' '}
+                      <a
+                        href={selectedCountry.boundarySourceUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >{selectedCountry.boundarySource}</a>
+                      {selectedCountry.boundaryLicense ? (
+                        <>
+                          {' · '}
+                          <a
+                            href={selectedCountry.boundaryLicenseUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >{selectedCountry.boundaryLicense}</a>
+                        </>
+                      ) : null}
+                      {selectedCountry.boundaryChanges ? ` · ${selectedCountry.boundaryChanges}` : null}
+                    </small>
+                  ) : null}
+                </aside>
+              ) : null}
             </div>
 
             {/* Sticky action bar — two independent status toggles ('Been' /
