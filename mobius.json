@@ -1,7 +1,7 @@
 {
   "id": "atlas",
   "name": "Atlas",
-  "version": "1.9.14",
+  "version": "1.9.15",
   "description": "Spin the globe, tap the countries you've visited, and watch your map fill in.",
   "author": "mobius-os",
   "license": "MIT AND CC-BY-3.0-IGO",
@@ -42,8 +42,12 @@
     "theme.js",
     "domain.js",
     "storage.js",
+    "earthTexture.js",
+    "earthTextureDataA.js",
+    "earthTextureDataB.js",
     "ui/Globe.jsx",
     "ui/BottomSheet.jsx",
-    "ui/SyncPill.jsx"
+    "ui/SyncPill.jsx",
+    "ui/earthRenderer.js"
   ]
 }
