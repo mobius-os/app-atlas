@@ -21,6 +21,8 @@ import {
   versorCartesian,
   versorFromAngles,
 } from '../domain.js'
+import { BLUE_MARBLE_TEXTURE } from '../earthTexture.js'
+import { createEarthRenderer } from './earthRenderer.js'
 
 const TAP_MOVE_PX = 6
 
@@ -45,10 +47,9 @@ export function Globe({
   onInteract,
 }) {
   const containerRef = useRef(null)
+  const earthCanvasRef = useRef(null)
+  const earthRendererRef = useRef(null)
   const sphereRef = useRef(null)
-  const graticuleRef = useRef(null)
-  const shineRef = useRef(null)
-  const textureRef = useRef(null)
   const countryPathRefs = useRef(new Map())
   const d3Ref = useRef(null)
   const dragRef = useRef({
@@ -104,6 +105,13 @@ export function Globe({
   // the re-render) the same way rotation is — setZoomBoth keeps them in sync.
   const [zoom, setZoom] = useState(1)
   const [ready, setReady] = useState(false)
+  // The photographic Earth is an independent canvas layer beneath the SVG.
+  // It becomes visible only after its first successful paint; until then the
+  // existing ocean/land styling remains a complete fallback for slow decodes or
+  // WebViews without WebGL.
+  const [earthPainted, setEarthPainted] = useState(false)
+  const [earthRendererReady, setEarthRendererReady] = useState(false)
+  const [earthAttempt, setEarthAttempt] = useState(0)
   // True while a drag or release-glide is in flight. Flips at most twice per
   // gesture (grab → true, rest → false) — NOT per frame — so it costs no extra
   // renders, and lets the projection drop precision while the globe moves: a
@@ -209,6 +217,59 @@ export function Globe({
     window.addEventListener('online', retry)
     return () => window.removeEventListener('online', retry)
   }, [])
+
+  // Decode the bundled NASA texture and hand it to the canvas renderer. The
+  // renderer never owns interaction or geometry — it only paints real-world
+  // geography below the SVG. Context loss returns to the old SVG fallback and
+  // retries cleanly when the browser restores the canvas.
+  useEffect(() => {
+    const canvas = earthCanvasRef.current
+    if (!canvas || typeof Image === 'undefined') return undefined
+    let active = true
+    let renderer = null
+    setEarthRendererReady(false)
+    const image = new Image()
+    const onContextLost = (event) => {
+      event.preventDefault()
+      if (active) setEarthPainted(false)
+    }
+    const onContextRestored = () => {
+      if (active) setEarthAttempt((value) => value + 1)
+    }
+    canvas.addEventListener('webglcontextlost', onContextLost)
+    canvas.addEventListener('webglcontextrestored', onContextRestored)
+    image.onload = () => {
+      if (!active) return
+      try {
+        renderer = createEarthRenderer(canvas, image)
+        earthRendererRef.current = renderer
+        setEarthRendererReady(Boolean(renderer))
+        if (!renderer) setEarthPainted(false)
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('Atlas: Earth texture renderer unavailable', err)
+        earthRendererRef.current = null
+        setEarthRendererReady(false)
+        setEarthPainted(false)
+      }
+    }
+    image.onerror = () => {
+      if (!active) return
+      earthRendererRef.current = null
+      setEarthRendererReady(false)
+      setEarthPainted(false)
+    }
+    image.src = BLUE_MARBLE_TEXTURE
+    return () => {
+      active = false
+      image.onload = null
+      image.onerror = null
+      canvas.removeEventListener('webglcontextlost', onContextLost)
+      canvas.removeEventListener('webglcontextrestored', onContextRestored)
+      renderer?.destroy?.()
+      if (earthRendererRef.current === renderer) earthRendererRef.current = null
+    }
+  }, [earthAttempt])
 
   // Track the visible size of the SVG host so the projection rescales when
   // the bottom sheet drags up/down.
@@ -552,8 +613,7 @@ export function Globe({
       // back to crisp the instant it rests.
       .precision(spinning ? 1.6 : 0.4)
     const path = d3.geoPath(projection)
-    const graticule = d3.geoGraticule10()
-    return { projection, path, graticule, radius }
+    return { projection, path, radius }
   }, [ready, rotation, zoom, size.height, size.width, spinning])
 
   // Per-frame rendering stays out of React reconciliation. Dragging used to
@@ -565,9 +625,6 @@ export function Globe({
     if (!projectionData) return
     const sphere = projectionData.path({ type: 'Sphere' }) || ''
     sphereRef.current?.setAttribute('d', sphere)
-    shineRef.current?.setAttribute('d', sphere)
-    textureRef.current?.setAttribute('d', sphere)
-    graticuleRef.current?.setAttribute('d', projectionData.path(projectionData.graticule) || '')
 
     for (const country of renderCountries) {
       const node = countryPathRefs.current.get(country.iso3)
@@ -586,6 +643,20 @@ export function Globe({
       }
     }
   }, [projectionData, renderCountries])
+
+  // Repaint the photographic world whenever d3 changes the projection. One
+  // cheap WebGL draw keeps the canvas locked to the SVG through drag, inertia,
+  // pinch, wheel zoom, resize, and the crisp/coarse projection switch.
+  useLayoutEffect(() => {
+    if (!projectionData || !earthRendererRef.current) return
+    const painted = earthRendererRef.current.draw({
+      width: size.width,
+      height: size.height,
+      projection: projectionData.projection,
+      radius: projectionData.radius,
+    })
+    if (painted && !earthPainted) setEarthPainted(true)
+  }, [projectionData, size.width, size.height, earthPainted, earthRendererReady])
 
   const countryNodes = useMemo(() => (
     renderCountries.map((country) => {
@@ -681,7 +752,12 @@ export function Globe({
       onTapOcean?.()
       return true
     }
-    return false
+    // A tap in the globe canvas's negative space is the same "back to the
+    // world" gesture as tapping the ocean. Keep this in the shared pointer-up
+    // resolver (rather than adding a second click listener) so mouse, touch,
+    // pointer capture, and the drag threshold all agree on what a tap means.
+    onTapOcean?.()
+    return true
   }, [countryByIso3, onTapCountry, onTapOcean])
 
   const onPointerDown = (event) => {
@@ -933,6 +1009,11 @@ export function Globe({
 
   return (
     <div ref={containerRef} className="cb-globe-canvas">
+      <canvas
+        ref={earthCanvasRef}
+        className={'cb-earth-canvas' + (earthPainted ? ' is-painted' : '')}
+        aria-hidden="true"
+      />
       {depFailed ? (
         <div className="cb-globe-loading cb-globe-loading--offline" role="status">
           Globe needs one online load — pull to refresh when you're back online.
@@ -941,7 +1022,7 @@ export function Globe({
         <div className="cb-globe-loading">Loading the world…</div>
       ) : (
         <svg
-          className="cb-globe-svg"
+          className={'cb-globe-svg' + (earthPainted ? ' cb-globe-svg--earth' : '')}
           viewBox={`0 0 ${size.width} ${size.height}`}
           tabIndex={0}
           aria-label="Globe — drag to spin, pinch or +/- to zoom"
@@ -964,26 +1045,8 @@ export function Globe({
               <stop offset="55%" stopColor="var(--cb-ocean-2)" />
               <stop offset="100%" stopColor="var(--cb-ocean-3)" />
             </radialGradient>
-            <radialGradient id="cb-shine" cx="35%" cy="28%">
-              <stop offset="0%" stopColor="var(--cb-shine-1)" />
-              <stop offset="45%" stopColor="var(--cb-shine-2)" />
-              <stop offset="100%" stopColor="var(--cb-shine-3)" />
-            </radialGradient>
             <filter id="cb-glow" x="-50%" y="-50%" width="200%" height="200%">
               <feGaussianBlur stdDeviation="16" />
-            </filter>
-            <filter id="cb-earth-grain" x="-5%" y="-5%" width="110%" height="110%">
-              <feTurbulence type="fractalNoise" baseFrequency="0.018 0.032" numOctaves="3" seed="17" result="noise" />
-              <feColorMatrix
-                in="noise"
-                type="matrix"
-                values="0 0 0 0 1
-                        0 0 0 0 0.96
-                        0 0 0 0 0.84
-                        0 0 0 0.18 0"
-                result="tint"
-              />
-              <feComposite in="tint" in2="SourceAlpha" operator="in" />
             </filter>
           </defs>
 
@@ -1007,7 +1070,7 @@ export function Globe({
           <path
             ref={sphereRef}
             data-atlas-ocean="true"
-            fill="url(#cb-ocean)"
+            fill={earthPainted ? 'transparent' : 'url(#cb-ocean)'}
             stroke="color-mix(in srgb, var(--text) 22%, transparent)"
             strokeWidth="1"
             onClick={() => {
@@ -1018,15 +1081,6 @@ export function Globe({
             style={{ cursor: 'pointer' }}
           />
 
-          {/* Graticule */}
-          <path
-            ref={graticuleRef}
-            fill="none"
-            stroke="color-mix(in srgb, #d8efff 18%, transparent)"
-            strokeWidth="0.5"
-            pointerEvents="none"
-          />
-
           {/* Countries — each path is wrapped in a <g role="button"> with
              an accessible name + a <title> child. Screen readers read the
              country name (and visited state) instead of "image image image",
@@ -1035,23 +1089,6 @@ export function Globe({
              without a sub-pixel tap. */}
           {countryNodes}
 
-          {/* A clipped procedural grain gives the globe a more natural surface
-             without adding network tiles or changing country hit targets. */}
-          <path
-            ref={textureRef}
-            fill="#fff"
-            filter="url(#cb-earth-grain)"
-            opacity="0.34"
-            pointerEvents="none"
-          />
-
-          {/* Specular shine */}
-          <path
-            ref={shineRef}
-            fill="url(#cb-shine)"
-            opacity="0.18"
-            pointerEvents="none"
-          />
         </svg>
       )}
     </div>

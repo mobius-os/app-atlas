@@ -46,37 +46,27 @@ export const CSS = `
   --cb-ocean-2: color-mix(in srgb, #186cae 82%, var(--bg) 18%);
   --cb-ocean-3: color-mix(in srgb, #082a5d 92%, var(--bg) 8%);
   /* /mobius-ui:identity-palette */
-  /* Specular shine — a soft highlight. Mixing with literal white
-     read OK on dark themes but flat-out vanished into the page on
-     light ones; mix toward --bg so the highlight sits one shade
-     lighter than the underlying surface in every theme. The
-     accent tint keeps the globe feeling planet-shaped rather
-     than just paler-than-its-frame. */
-  --cb-shine-1: color-mix(in srgb, #ffffff 30%, transparent);
-  --cb-shine-2: color-mix(in srgb, #d8efff 13%, transparent);
-  --cb-shine-3: transparent;
   --cb-surface: color-mix(in srgb, var(--surface) 82%, transparent);
   /* --surface2 isn't guaranteed by every Möbius theme; fall back
      to --surface so the sheet stays solid on themes that don't
      define the deeper surface token. */
   --cb-surface-strong: color-mix(in srgb, var(--surface2, var(--surface)) 92%, transparent);
   --cb-border: var(--border);
-  --cb-land-fill: color-mix(in srgb, #c7b98f 82%, var(--surface) 18%);
-  --cb-land-hover: color-mix(in srgb, #d8c99d 82%, var(--text) 18%);
-  --cb-land-stroke: color-mix(in srgb, #24333b 62%, var(--bg) 38%);
-  /* Status colours are overlays, not alternate terrain. The fill mixes status
-     back into the same neutral land, so the procedural world texture remains
-     visible and unvisited countries never look accidentally marked. */
-  --cb-visited-base: color-mix(in srgb, var(--green, #27ae60) 78%, var(--accent) 22%);
-  --cb-visited-fill: color-mix(in srgb, var(--cb-visited-base) 48%, var(--cb-land-fill) 52%);
-  --cb-visited-stroke: color-mix(in srgb, var(--cb-visited-base) 58%, var(--cb-land-stroke) 42%);
-  --cb-wishlist: color-mix(in srgb, #f39c12 88%, var(--cb-land-fill) 12%);
-  --cb-wishlist-fill: color-mix(in srgb, var(--cb-wishlist) 54%, var(--cb-land-fill) 46%);
-  /* Selected fill: the theme accent brightened with literal white — NOT
-     --text, which flips dark on light themes and would read as shadow
-     instead of highlight. The white lift keeps it clearly lighter than
-     the visited green even on themes whose accent is itself green. */
-  --cb-selected-fill: color-mix(in srgb, var(--accent) 72%, #ffffff 28%);
+  /* SVG country paths now sit above the photographic world. A virtually clear
+     base fill preserves whole-country hit targets without repainting the land;
+     the status colours are literal translucent ink laid over the same Earth. */
+  --cb-land-fill: rgb(255 255 255 / 0.001);
+  --cb-land-hover: rgb(255 255 255 / 0.12);
+  --cb-land-stroke: rgb(13 31 36 / 0.72);
+  --cb-visited-base: #18b878;
+  --cb-visited-fill: color-mix(in srgb, var(--cb-visited-base) 48%, #c7b98f 52%);
+  --cb-visited-overlay: rgb(19 174 112 / 0.30);
+  --cb-visited-stroke: rgb(106 211 165 / 0.78);
+  --cb-wishlist: #f39a32;
+  --cb-wishlist-fill: color-mix(in srgb, var(--cb-wishlist) 54%, #c7b98f 46%);
+  --cb-wishlist-overlay: rgb(239 145 37 / 0.34);
+  --cb-wishlist-stroke: rgb(244 177 81 / 0.86);
+  --cb-fallback-land-fill: color-mix(in srgb, #c7b98f 82%, var(--surface) 18%);
   /* Foreground on the ACTIVE 'Been'/'Want to go' CTAs. Those CTAs fill with the
      app-identity status colors (--cb-visited-fill green / --cb-wishlist orange),
      NOT the theme --accent — so --accent-fg is the wrong token here: on the
@@ -339,6 +329,22 @@ export const CSS = `
   width: 100%;
   height: 100%;
   display: block;
+  position: relative;
+  z-index: 1;
+}
+.cb-earth-canvas {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms ease;
+}
+.cb-earth-canvas.is-painted {
+  opacity: 1;
 }
 /* Suppress the outline only for mouse/touch focus; the shared Focus
    block below still paints a ring for keyboard (:focus-visible) users. */
@@ -368,6 +374,7 @@ export const CSS = `
   font-size: 14px;
   text-align: center;
   padding: 0 24px;
+  z-index: 2;
 }
 .cb-globe-loading--offline {
   /* Sticks slightly above center so it doesn't overlap the bottom
@@ -384,7 +391,7 @@ export const CSS = `
   cursor: pointer;
 }
 .cb-country--visited {
-  fill: var(--cb-visited-fill);
+  fill: var(--cb-visited-overlay);
   /* Stroke previously mixed accent with literal "white", which
      vanished the outline on light themes. Mix with --bg so the
      border keeps separation from the ocean in every theme. */
@@ -392,25 +399,28 @@ export const CSS = `
   stroke-width: 0.64;
 }
 .cb-country--wishlist {
-  fill: var(--cb-wishlist-fill);
-  stroke: color-mix(in srgb, var(--cb-wishlist) 58%, var(--cb-land-stroke) 42%);
+  fill: var(--cb-wishlist-overlay);
+  stroke: var(--cb-wishlist-stroke);
   stroke-width: 0.64;
 }
 .cb-country--selected {
-  /* Selection highlights the TERRITORY, never its boundary. A stroke-based
-     highlight can't work here: each country is one path, but countries
-     paint in document order, so a neighbor drawn later overpaints the half
-     of the selection stroke that falls on its side of a shared border (and
-     redraws its own dark stroke on top) — the white outline showed up
-     broken wherever the selected country touched land. A fill can't be
-     overpainted (polygons tile), and because the whole MultiPolygon is one
-     path keyed by iso3 the fill covers every island and exclave too.
-     The country keeps its normal boundary stroke (land/visited/wishlist);
-     only the fill changes — flat, no glow (owner feedback: drop-shadows
-     read as smudge, and the accent+white fill is unambiguous on its own).
-     Overrides visited/wishlist fill so the selection is always clear —
-     the CTA state in the detail panel shows the status instead. */
-  fill: var(--cb-selected-fill);
+  /* Selection is an outline, not another terrain paint. renderCountries puts
+     it last, so its complete border stays above neighbouring country strokes
+     while the photograph and any status ink remain visible inside. */
+  stroke: rgb(255 255 255 / 0.96);
+  stroke-width: 1.35;
+}
+/* A no-WebGL/slow-decode fallback remains a complete illustrated globe rather
+   than blue ocean with invisible land. The moment the canvas paints, these
+   rules drop away and every ordinary country becomes a clear hit layer. */
+.cb-globe-svg:not(.cb-globe-svg--earth) .cb-country {
+  fill: var(--cb-fallback-land-fill);
+}
+.cb-globe-svg:not(.cb-globe-svg--earth) .cb-country--visited {
+  fill: var(--cb-visited-fill);
+}
+.cb-globe-svg:not(.cb-globe-svg--earth) .cb-country--wishlist {
+  fill: var(--cb-wishlist-fill);
 }
 /* Status filter mirror — countries outside the active filter fade back so
    the matching set reads at a glance. Opacity (not a fill swap) keeps the
