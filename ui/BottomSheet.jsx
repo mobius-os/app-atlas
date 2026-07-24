@@ -399,6 +399,9 @@ export function BottomSheet({
                   ))}
                 </dl>
               ) : null}
+              {/* Older persisted country seeds included "Boundary:" in the
+                  source value. Strip it at display time so both old and current
+                  installs render one label without rewriting saved data. */}
               {selectedCountry.boundaryNote ? (
                 <aside className="cb-boundary-note" aria-label="Boundary note">
                   <p>{selectedCountry.boundaryNote}</p>
@@ -409,7 +412,7 @@ export function BottomSheet({
                         href={selectedCountry.boundarySourceUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                      >{selectedCountry.boundarySource}</a>
+                      >{String(selectedCountry.boundarySource).replace(/^Boundary:\s*/i, '')}</a>
                       {selectedCountry.boundaryLicense ? (
                         <>
                           {' · '}

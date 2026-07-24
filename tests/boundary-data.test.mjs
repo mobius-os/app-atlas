@@ -52,6 +52,10 @@ test('Somalia carries the owner-visible OCHA provenance note', () => {
   assert.match(sheet, /href=\{selectedCountry\.boundarySourceUrl\}/)
   assert.match(sheet, /href=\{selectedCountry\.boundaryLicenseUrl\}/)
   assert.match(sheet, /target="_blank"[\s\S]*?rel="noopener noreferrer"/)
+  assert.ok(
+    sheet.includes("String(selectedCountry.boundarySource).replace(/^Boundary:\\s*/i, '')"),
+    'older persisted sources must not render a second Boundary label',
+  )
 })
 
 test('the installed package advertises the third-party data license', () => {
