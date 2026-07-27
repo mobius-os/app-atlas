@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import {
+  Check,
+  Globe,
+  Search,
+  Star,
+  StarFilled,
+  X,
+} from '@openai/apps-sdk-ui/components/Icon'
+import {
   clamp,
   formatArea,
   formatLanguages,
@@ -29,113 +37,36 @@ const SHEET_STOPS_DEFAULT = [SHEET_MIN, SHEET_MID, SHEET_MAX]
 const SHEET_OPEN_DEFAULT = SHEET_MIN
 
 // Icon-only filter chips — globe = everything, check = visited, star =
-// wishlist. Inline SVGs, not unicode glyphs, for the same reason as the
-// search icon (codepoints render as tofu on some Android WebViews); the
-// aria-label + title carry the meaning for screen readers and desktop hover.
+// wishlist. Generic controls use the same OpenAI icon family as the shell;
+// the aria-label + title carry the meaning for screen readers and hover.
 const FILTER_CHIPS = [
   {
     id: 'all',
     label: 'Show all countries',
     shortLabel: 'All',
-    icon: (
-      <svg
-        width="18"
-        height="18"
-        viewBox="0 0 18 18"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        aria-hidden="true"
-        focusable="false"
-      >
-        <circle cx="9" cy="9" r="6.75" />
-        <ellipse cx="9" cy="9" rx="3.1" ry="6.75" />
-        <line x1="2.25" y1="9" x2="15.75" y2="9" />
-      </svg>
-    ),
+    icon: <Globe width={18} height={18} aria-hidden="true" focusable="false" />,
   },
   {
     id: 'visited',
     label: 'Show visited only',
     shortLabel: 'Been',
-    icon: (
-      <svg
-        width="18"
-        height="18"
-        viewBox="0 0 18 18"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        aria-hidden="true"
-        focusable="false"
-      >
-        <polyline points="3.2,9.6 7.2,13.4 14.8,4.8" />
-      </svg>
-    ),
+    icon: <Check width={18} height={18} aria-hidden="true" focusable="false" />,
   },
   {
     id: 'wishlist',
     label: 'Show wishlist only',
     shortLabel: 'Wishlist',
-    icon: (
-      <svg
-        width="18"
-        height="18"
-        viewBox="0 0 18 18"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinejoin="round"
-        aria-hidden="true"
-        focusable="false"
-      >
-        <path d="M9 2.4 L10.9 6.7 15.6 7.2 12.1 10.4 13.1 15 9 12.5 4.9 15 5.9 10.4 2.4 7.2 7.1 6.7 Z" />
-      </svg>
-    ),
+    icon: <Star width={18} height={18} aria-hidden="true" focusable="false" />,
   },
 ]
 
-// Status marks are SVG rather than font glyphs. The star/check characters used
-// to fall back to square tofu in some browsers even though the filter bar's
-// icons rendered correctly; one vector shape now stays crisp in every host.
 function StatusCheckIcon({ size = 16 }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 18 18"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      focusable="false"
-    >
-      <polyline points="3.2,9.6 7.2,13.4 14.8,4.8" />
-    </svg>
-  )
+  return <Check width={size} height={size} aria-hidden="true" focusable="false" />
 }
 
 function StatusStarIcon({ size = 18, filled = false }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 18 18"
-      fill={filled ? 'currentColor' : 'none'}
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      focusable="false"
-    >
-      <path d="M9 2.4 L10.9 6.7 15.6 7.2 12.1 10.4 13.1 15 9 12.5 4.9 15 5.9 10.4 2.4 7.2 7.1 6.7 Z" />
-    </svg>
-  )
+  const Icon = filled ? StarFilled : Star
+  return <Icon width={size} height={size} aria-hidden="true" focusable="false" />
 }
 
 export function BottomSheet({
@@ -364,19 +295,7 @@ export function BottomSheet({
                 onClick={onDeselect}
                 aria-label="Close country detail"
               >
-                <svg
-                  width="18"
-                  height="18"
-                  viewBox="0 0 18 18"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                  aria-hidden="true"
-                >
-                  <line x1="4" y1="4" x2="14" y2="14" />
-                  <line x1="14" y1="4" x2="4" y2="14" />
-                </svg>
+                <X width={18} height={18} aria-hidden="true" />
               </button>
             </div>
 
@@ -462,24 +381,13 @@ export function BottomSheet({
       <div className={'cb-list-panel' + (selectedCountry ? ' cb-list-panel--hidden' : '')}>
         <div className="cb-sheet-controls">
           <div className="cb-sheet-search">
-            {/* Inline SVG, not U+2315 — the codepoint renders as tofu on some
-                Android WebViews even when the system claims symbol coverage. */}
-            <svg
+            <Search
               className="cb-sheet-search-icon"
               width="16"
               height="16"
-              viewBox="0 0 16 16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.6"
-              strokeLinecap="round"
-              strokeLinejoin="round"
               aria-hidden="true"
               focusable="false"
-            >
-              <circle cx="7" cy="7" r="4.5" />
-              <line x1="10.5" y1="10.5" x2="13.5" y2="13.5" />
-            </svg>
+            />
             <input
               type="search"
               value={query}
@@ -497,19 +405,7 @@ export function BottomSheet({
                 onClick={() => onQueryChange('')}
                 aria-label="Clear search"
               >
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 14 14"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.6"
-                  strokeLinecap="round"
-                  aria-hidden="true"
-                >
-                  <line x1="3" y1="3" x2="11" y2="11" />
-                  <line x1="11" y1="3" x2="3" y2="11" />
-                </svg>
+                <X width={14} height={14} aria-hidden="true" />
               </button>
             ) : null}
           </div>
