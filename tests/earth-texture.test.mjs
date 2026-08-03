@@ -67,18 +67,26 @@ test('the photographic layer preserves the SVG fallback and interaction layer', 
   assert.match(css, /--cb-wishlist-overlay: rgb\(239 145 37 \/ 0\.34\)/)
 })
 
-test('motion defers the expensive country overlay only when the Earth canvas is painted', () => {
+test('motion defers country paths only when the canvas can preserve their outlines', () => {
   const globe = read('ui/Globe.jsx')
   const css = read('theme.js')
+  const renderer = read('ui/earthRenderer.js')
 
-  assert.match(globe, /const countryOverlayDeferred = spinning && earthPainted/)
   assert.match(
     globe,
-    /sphereRef\.current\?\.setAttribute\('d', sphere\)[\s\S]*?if \(countryOverlayDeferred\) return[\s\S]*?for \(const country of renderCountries\)/,
+    /const countryOverlayDeferred = spinning && earthPainted && earthOutlinesReady/,
+  )
+  assert.match(
+    globe,
+    /if \(countryOverlayDeferred\) return[\s\S]*?for \(const country of renderCountries\)/,
   )
   assert.match(globe, /<g className="cb-country-layer">\{countryNodes\}<\/g>/)
+  assert.match(globe, /setCountryOutlines\([\s\S]*?normalizedCountries\.map/)
+  assert.match(globe, /showCountryOutlines: countryOverlayDeferred/)
   assert.match(
     css,
     /\.cb-globe-svg--earth\.cb-globe-svg--moving \.cb-country-layer\s*\{\s*visibility: hidden;/,
   )
+  assert.match(renderer, /setCountryOutlines\(geometries\)/)
+  assert.match(renderer, /u_outline_strength/)
 })

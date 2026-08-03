@@ -109,6 +109,7 @@ export function Globe({
   // WebViews without WebGL.
   const [earthPainted, setEarthPainted] = useState(false)
   const [earthRendererReady, setEarthRendererReady] = useState(false)
+  const [earthOutlinesReady, setEarthOutlinesReady] = useState(false)
   const [earthAttempt, setEarthAttempt] = useState(0)
   // True while drag/inertia or zoom is moving. With the photo renderer active,
   // motion updates only that cheap layer; country hit paths refresh at rest.
@@ -224,6 +225,7 @@ export function Globe({
     let active = true
     let renderer = null
     setEarthRendererReady(false)
+    setEarthOutlinesReady(false)
     const image = new Image()
     const onContextLost = (event) => {
       event.preventDefault()
@@ -553,6 +555,16 @@ export function Globe({
   }, [countries, ready])
   const normalizedCountries = normalized.list
 
+  // Build the renderer's equirectangular border mask once per geometry load.
+  // The shader samples it with the Earth texture, so boundaries stay locked to
+  // motion without projecting GeoJSON during a gesture frame.
+  useEffect(() => {
+    const ready = earthRendererRef.current?.setCountryOutlines(
+      normalizedCountries.map((country) => country.geometry),
+    ) || false
+    setEarthOutlinesReady(ready)
+  }, [normalizedCountries, earthRendererReady])
+
   // Report the seed geometry repair counts up to the app (which emits the
   // geometry_repaired Reflection signal). The parent dedups to one emit and only
   // fires when a repair actually happened, so a clean seed reports nothing.
@@ -618,7 +630,7 @@ export function Globe({
   }, [ready, rotation, zoom, size.height, size.width, spinning])
 
   // The photo is a complete globe during motion; its SVG hit overlay can wait.
-  const countryOverlayDeferred = spinning && earthPainted
+  const countryOverlayDeferred = spinning && earthPainted && earthOutlinesReady
 
   // Refresh the full overlay before the browser reveals it at rest. Without
   // WebGL, countryOverlayDeferred stays false and this remains the render path.
@@ -657,9 +669,10 @@ export function Globe({
       height: size.height,
       projection: projectionData.projection,
       radius: projectionData.radius,
+      showCountryOutlines: countryOverlayDeferred,
     })
     if (painted && !earthPainted) setEarthPainted(true)
-  }, [projectionData, size.width, size.height, earthPainted, earthRendererReady])
+  }, [projectionData, size.width, size.height, earthPainted, earthRendererReady, countryOverlayDeferred])
 
   const countryNodes = useMemo(() => (
     renderCountries.map((country) => {
