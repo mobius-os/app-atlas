@@ -16,6 +16,7 @@ import {
   STATUS_FILTERS,
   angularStepDeg,
   classifyStatusToggle,
+  createVersorDragAnchor,
   easePointerToDisc,
   filterCountriesByStatus,
   formatArea,
@@ -274,6 +275,38 @@ test('nextDragRotation is exact 1:1 away from the poles and eases into them', ()
 
   // No dead zone at the top — dragging back out is always possible.
   assert.deepEqual(nextDragRotation([12, 84, 0], 18, 60), [18, 60, 0])
+})
+
+test('a versor anchor captured at pointer-down makes the first displaced move rotate immediately', () => {
+  const cx = 200
+  const cy = 200
+  const radius = 100
+  const rotation = [0, 0, 0]
+  const makeProjection = makeOrtho(cx, cy, radius)
+  const anchor = createVersorDragAnchor({
+    makeProjection,
+    rotation,
+    px: cx + 10,
+    py: cy,
+    cx,
+    cy,
+    radius,
+  })
+
+  assert.ok(anchor, 'pointer-down on the globe produces a usable drag anchor')
+  const firstMove = solveVersorDrag({
+    makeProjection,
+    ...anchor,
+    current: rotation,
+    px: cx + 28,
+    py: cy,
+    cx,
+    cy,
+    radius,
+  })
+
+  assert.ok(firstMove, 'the first displaced move resolves a rotation')
+  assert.ok(angularStepDeg(rotation, firstMove) > 0.1, 'the first move is visible, not consumed as setup')
 })
 
 test('easePointerToDisc leaves the inner disc untouched and eases an off-disc pointer below the singular limb', () => {

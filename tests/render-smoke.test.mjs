@@ -29,6 +29,7 @@ const RUNTIME_LIBS = [
   'react-dom',
   'react-dom/client',
   'd3-geo',
+  '@openai/apps-sdk-ui/components/Icon',
 ]
 
 const REACT_SPEC = 'react'
@@ -56,7 +57,9 @@ async function bundleAndImport() {
     if (dflt) set.add('default')
     if (named) {
       for (const piece of named.split(',')) {
-        const name = piece.trim().split(/\s+as\s+/).pop().trim()
+        // An aliased import (`Globe as Globe2`) still requires the source
+        // module to export `Globe`; the local alias is not part of its contract.
+        const name = piece.trim().split(/\s+as\s+/).shift().trim()
         if (name) set.add(name)
       }
     }

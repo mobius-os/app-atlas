@@ -12,14 +12,12 @@ import {
   ZOOM_SNAP_EPS,
   ZOOM_STEP,
   clamp,
-  easePointerToDisc,
+  createVersorDragAnchor,
   nextDragRotation,
   pinchSpread,
   reverseWinding,
   shortestLngDelta,
   solveVersorDrag,
-  versorCartesian,
-  versorFromAngles,
 } from '../domain.js'
 import { BLUE_MARBLE_TEXTURE } from '../earthTexture.js'
 import { createEarthRenderer } from './earthRenderer.js'
@@ -121,19 +119,24 @@ export function Globe({
   const [spinning, setSpinning] = useState(false)
   const spinningRef = useRef(false)
   // Recompute the public spinning flag from its two sources (drag/inertia and
-  // zoom glide) and push it to state only when it actually flips — so neither
-  // motion loop costs a render per frame, and whichever settles last is the one
-  // that finally repaints the globe crisp.
+  // zoom glide) and push it to state only when it actually flips. Motion-start
+  // callers invoke this in the SAME callback as the first changed rotation or
+  // zoom, so the coarse-detail switch never redraws a stationary globe before
+  // the first visible movement. Whichever source settles last repaints crisp.
   const syncSpinning = useCallback(() => {
     const on = inertiaActiveRef.current || zoomGlideActiveRef.current
     if (spinningRef.current === on) return
     spinningRef.current = on
     setSpinning(on)
   }, [])
-  // Drag + release-inertia source toggle (kept named setSpinningBoth so its
-  // existing call sites read unchanged); the zoom glide owns the other source.
-  const setSpinningBoth = useCallback((on) => {
-    inertiaActiveRef.current = on
+  // Starting a drag is intentionally ref-only: its first solved rotation owns
+  // the render and calls syncSpinning beside setRotation. Stopping must sync
+  // immediately so a settled globe gets its crisp boundary repaint.
+  const beginDragMotion = useCallback(() => {
+    inertiaActiveRef.current = true
+  }, [])
+  const endDragMotion = useCallback(() => {
+    inertiaActiveRef.current = false
     syncSpinning()
   }, [syncSpinning])
   // depFailed used to be sticky for the rest of the session — a single
@@ -347,6 +350,7 @@ export function Globe({
   // versor solver always reads the freshest baseline), but setRotation — the
   // expensive re-render — fires once per frame from the flush below.
   const scheduleRotation = useCallback((next) => {
+    beginDragMotion()
     rotationRef.current = next // keep the gesture baseline exact between frames
     pendingRotationRef.current = next
     if (rafRef.current) return // a frame is already queued; it'll pick up the latest
@@ -354,9 +358,12 @@ export function Globe({
       rafRef.current = 0
       const pending = pendingRotationRef.current
       pendingRotationRef.current = null
-      if (pending) setRotation(pending)
+      if (pending) {
+        syncSpinning()
+        setRotation(pending)
+      }
     })
-  }, [])
+  }, [beginDragMotion, syncSpinning])
 
   // Record one move's angular delta so finishDrag can read the release velocity.
   // We keep the last VELOCITY_SAMPLES so a jittery final frame doesn't define
@@ -383,7 +390,7 @@ export function Globe({
     // able rather than blurring; tiny drifts below the floor never start a loop.
     const speed = Math.hypot(vLng, vLat)
     if (speed < INERTIA_MIN_SPEED) {
-      setSpinningBoth(false) // released without a flick — rest now, paint crisp
+      endDragMotion() // released without a flick — rest now, paint crisp
       return
     }
     if (speed > INERTIA_MAX_SPEED) {
@@ -396,19 +403,20 @@ export function Globe({
       vLat *= INERTIA_FRICTION
       if (Math.hypot(vLng, vLat) < INERTIA_MIN_SPEED) {
         inertiaRef.current = 0
-        setSpinningBoth(false) // glide settled — repaint crisp
+        endDragMotion() // glide settled — repaint crisp
         return
       }
       const cur = rotationRef.current
       const next = nextDragRotation(cur, (cur[0] ?? 0) + vLng, (cur[1] ?? 0) + vLat)
       if (next) {
         rotationRef.current = next
+        syncSpinning()
         setRotation(next) // already one update per frame — no extra coalescing needed
       }
       inertiaRef.current = requestAnimationFrame(step)
     }
     inertiaRef.current = requestAnimationFrame(step)
-  }, [cancelInertia, setSpinningBoth])
+  }, [cancelInertia, endDragMotion, syncSpinning])
 
   // Stop the zoom-glide follower wherever it is and re-park the target at the
   // frozen zoom. Called on pointerdown (a fresh grab/pinch interrupts the glide)
@@ -439,7 +447,6 @@ export function Globe({
     if (zoomGlideRafRef.current) return // a frame is already queued; it reads the latest target
     if (!zoomGlideActiveRef.current) {
       zoomGlideActiveRef.current = true
-      syncSpinning() // coarse tessellation for the duration of the glide
     }
     const step = () => {
       const target = zoomTargetRef.current
@@ -454,6 +461,7 @@ export function Globe({
         return
       }
       zoomRef.current = next
+      syncSpinning()
       setZoom(next)
       zoomGlideRafRef.current = requestAnimationFrame(step)
     }
@@ -478,9 +486,10 @@ export function Globe({
       }
       cancelZoomGlide()
       zoomRef.current = clamped
+      syncSpinning()
       setZoom(clamped)
     },
-    [startZoomGlide, cancelZoomGlide],
+    [startZoomGlide, cancelZoomGlide, syncSpinning],
   )
 
   // Multiply the current TARGET zoom by a factor and glide there — the shape the
@@ -718,19 +727,49 @@ export function Globe({
   // that zooms (and suspends rotation). The pointer count in pointersRef is
   // the single source of truth for which mode we're in.
 
+  const makeDragProjection = (rot) => {
+    const d3 = d3Ref.current
+    if (!d3 || !projectionData) return null
+    return d3
+      .geoOrthographic()
+      .translate([size.width / 2, size.height / 2])
+      .scale(projectionData.radius)
+      .clipAngle(90)
+      .rotate(rot)
+  }
+
+  // Convert a live DOM pointer into the versor anchor that owns the whole
+  // gesture. Pointer-down and pinch handoff both call this before the next
+  // move, so no real movement is ever consumed merely establishing a baseline.
+  const dragAnchorAtPointer = (clientX, clientY, node, rotationAtGrab) => {
+    if (!projectionData || !node) return null
+    const rect = node.getBoundingClientRect()
+    return createVersorDragAnchor({
+      makeProjection: makeDragProjection,
+      rotation: rotationAtGrab,
+      px: clientX - rect.left,
+      py: clientY - rect.top,
+      cx: size.width / 2,
+      cy: size.height / 2,
+      radius: projectionData.radius,
+    })
+  }
+
   // Re-seat the drag baseline at the leftover pointer's current position so
   // rotation continues from where the finger is — without this, lifting one
   // finger after a pinch would snap the globe by the accumulated delta.
-  const reseatDrag = (pointer) => {
+  const reseatDrag = (pointer, node) => {
+    const startRotate = rotationRef.current.slice()
+    const anchor = dragAnchorAtPointer(pointer.x, pointer.y, node, startRotate)
     dragRef.current = {
       active: true,
       moved: true, // a pinch happened; never treat the lift-off as a tap
       startX: pointer.x,
       startY: pointer.y,
-      startRotate: rotationRef.current.slice(),
-      // Re-grab the versor baseline on the next move (see onPointerMove).
+      startRotate,
       v0: null,
       q0: null,
+      ...(anchor || {}),
     }
   }
 
@@ -776,7 +815,7 @@ export function Globe({
       // moved so the gesture can't end in a tap).
       dragRef.current.active = false
       dragRef.current.moved = true
-      setSpinningBoth(true)
+      beginDragMotion()
       pinchRef.current = {
         active: true,
         startDist: pinchSpread(pointersRef.current) || 1,
@@ -787,17 +826,22 @@ export function Globe({
       // Drag-rotate is only promoted to "moving" after the tap threshold in
       // onPointerMove. A plain country tap should not trigger a projection
       // precision swap before the click/selection resolves.
+      const startRotate = rotationRef.current.slice()
+      const anchor = dragAnchorAtPointer(
+        event.clientX,
+        event.clientY,
+        event.currentTarget,
+        startRotate,
+      )
       dragRef.current = {
         active: true,
         moved: false,
         startX: event.clientX,
         startY: event.clientY,
-        startRotate: rotationRef.current.slice(),
-        // Versor baseline (grab point as a unit vector + the rotation-at-grab
-        // as a quaternion) is captured on the first move, once we have the
-        // pointer's position relative to the SVG.
+        startRotate,
         v0: null,
         q0: null,
+        ...(anchor || {}),
       }
     }
   }
@@ -822,7 +866,6 @@ export function Globe({
     if (!dragRef.current.moved) {
       if (Math.hypot(dx, dy) <= TAP_MOVE_PX) return
       dragRef.current.moved = true
-      setSpinningBoth(true)
       onInteract?.('drag') // a real drag-to-rotate began (past the tap threshold)
     }
 
@@ -844,25 +887,18 @@ export function Globe({
       const cx = size.width / 2
       const cy = size.height / 2
       const radius = projectionData.radius
-      const makeProjection = (rot) =>
-        d3
-          .geoOrthographic()
-          .translate([cx, cy])
-          .scale(radius)
-          .clipAngle(90)
-          .rotate(rot)
-      // Capture the grab baseline on the first move of the gesture (and after a
-      // pinch hands control back). Soft-ease the grab pixel into the disc too, so
-      // a gesture that STARTS near the edge still anchors to a real surface point
-      // instead of falling back to the linear path.
+      const makeProjection = makeDragProjection
+      // Defensive fallback for a projection that became ready after pointer-
+      // down. The rendered globe normally anchors on pointer-down; this keeps an
+      // unusual mid-gesture readiness transition usable without a second path.
       if (!drag.v0) {
-        const [gx, gy] = easePointerToDisc(px, py, cx, cy, radius)
-        const grab = makeProjection(rotationRef.current).invert([gx, gy])
-        if (grab && Number.isFinite(grab[0]) && Number.isFinite(grab[1])) {
-          drag.startRotate = rotationRef.current.slice()
-          drag.v0 = versorCartesian(grab)
-          drag.q0 = versorFromAngles(drag.startRotate)
-        }
+        const anchor = dragAnchorAtPointer(
+          event.clientX,
+          event.clientY,
+          event.currentTarget,
+          rotationRef.current,
+        )
+        if (anchor) Object.assign(drag, anchor)
       }
       if (drag.v0) {
         const next = solveVersorDrag({
@@ -916,7 +952,7 @@ export function Globe({
       pinchRef.current.active = false
       const [leftover] = [...pointersRef.current.values()]
       if (leftover) {
-        reseatDrag(leftover)
+        reseatDrag(leftover, event.currentTarget)
         return
       }
     }
@@ -934,7 +970,7 @@ export function Globe({
       cancelRotationFrame()
       startInertia()
     } else {
-      setSpinningBoth(false)
+      endDragMotion()
       if (event?.type === 'pointerup') handledTap = resolveTapFromPoint(event)
     }
     velocityRef.current.samples = []

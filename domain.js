@@ -223,6 +223,25 @@ export function easePointerToDisc(px, py, cx, cy, radius) {
   return [cx + dx * k, cy + dy * k]
 }
 
+// Capture the surface point under a pointer at the moment a drag begins.
+// Keeping this separate from solveVersorDrag preserves the important ordering:
+// the anchor belongs to pointer-down, while the first displaced pointer-move
+// must already produce a rotation. Capturing on that first move instead would
+// consume it as setup and make every newly settled globe feel briefly stuck.
+export function createVersorDragAnchor({ makeProjection, rotation, px, py, cx, cy, radius }) {
+  if (typeof makeProjection !== 'function' || !Array.isArray(rotation)) return null
+  const [gx, gy] = easePointerToDisc(px, py, cx, cy, radius)
+  const projection = makeProjection(rotation)
+  const grab = projection?.invert?.([gx, gy])
+  if (!grab || !Number.isFinite(grab[0]) || !Number.isFinite(grab[1])) return null
+  const startRotate = rotation.slice()
+  return {
+    startRotate,
+    v0: versorCartesian(grab),
+    q0: versorFromAngles(startRotate),
+  }
+}
+
 const isRotationSingular = (rotation) => Math.abs(rotation?.[1] || 0) >= ROTATION_SINGULARITY_LAT
 // Smoothly compress latitude near the poles instead of slamming a hard clamp.
 // tanh asymptotes toward the ceiling, so the drag *eases* into the pole — no
