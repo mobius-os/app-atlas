@@ -129,14 +129,11 @@ export function Globe({
     spinningRef.current = on
     setSpinning(on)
   }, [])
-  // Starting a drag is intentionally ref-only: its first solved rotation owns
-  // the render and calls syncSpinning beside setRotation. Stopping must sync
-  // immediately so a settled globe gets its crisp boundary repaint.
-  const beginDragMotion = useCallback(() => {
-    inertiaActiveRef.current = true
-  }, [])
-  const endDragMotion = useCallback(() => {
-    inertiaActiveRef.current = false
+  // The drag/inertia source owns one side of the derived motion flag; zoom
+  // glide owns the other. Starting is called beside the first changed transform
+  // so the quality switch and visible movement share one render.
+  const setDragMotionActive = useCallback((on) => {
+    inertiaActiveRef.current = on
     syncSpinning()
   }, [syncSpinning])
   // depFailed used to be sticky for the rest of the session — a single
@@ -350,7 +347,6 @@ export function Globe({
   // versor solver always reads the freshest baseline), but setRotation — the
   // expensive re-render — fires once per frame from the flush below.
   const scheduleRotation = useCallback((next) => {
-    beginDragMotion()
     rotationRef.current = next // keep the gesture baseline exact between frames
     pendingRotationRef.current = next
     if (rafRef.current) return // a frame is already queued; it'll pick up the latest
@@ -359,11 +355,11 @@ export function Globe({
       const pending = pendingRotationRef.current
       pendingRotationRef.current = null
       if (pending) {
-        syncSpinning()
+        setDragMotionActive(true)
         setRotation(pending)
       }
     })
-  }, [beginDragMotion, syncSpinning])
+  }, [setDragMotionActive])
 
   // Record one move's angular delta so finishDrag can read the release velocity.
   // We keep the last VELOCITY_SAMPLES so a jittery final frame doesn't define
@@ -390,7 +386,7 @@ export function Globe({
     // able rather than blurring; tiny drifts below the floor never start a loop.
     const speed = Math.hypot(vLng, vLat)
     if (speed < INERTIA_MIN_SPEED) {
-      endDragMotion() // released without a flick — rest now, paint crisp
+      setDragMotionActive(false) // released without a flick — rest now, paint crisp
       return
     }
     if (speed > INERTIA_MAX_SPEED) {
@@ -403,20 +399,20 @@ export function Globe({
       vLat *= INERTIA_FRICTION
       if (Math.hypot(vLng, vLat) < INERTIA_MIN_SPEED) {
         inertiaRef.current = 0
-        endDragMotion() // glide settled — repaint crisp
+        setDragMotionActive(false) // glide settled — repaint crisp
         return
       }
       const cur = rotationRef.current
       const next = nextDragRotation(cur, (cur[0] ?? 0) + vLng, (cur[1] ?? 0) + vLat)
       if (next) {
         rotationRef.current = next
-        syncSpinning()
+        setDragMotionActive(true)
         setRotation(next) // already one update per frame — no extra coalescing needed
       }
       inertiaRef.current = requestAnimationFrame(step)
     }
     inertiaRef.current = requestAnimationFrame(step)
-  }, [cancelInertia, endDragMotion, syncSpinning])
+  }, [cancelInertia, setDragMotionActive])
 
   // Stop the zoom-glide follower wherever it is and re-park the target at the
   // frozen zoom. Called on pointerdown (a fresh grab/pinch interrupts the glide)
@@ -486,10 +482,10 @@ export function Globe({
       }
       cancelZoomGlide()
       zoomRef.current = clamped
-      syncSpinning()
+      setDragMotionActive(true)
       setZoom(clamped)
     },
-    [startZoomGlide, cancelZoomGlide, syncSpinning],
+    [startZoomGlide, cancelZoomGlide, setDragMotionActive],
   )
 
   // Multiply the current TARGET zoom by a factor and glide there — the shape the
@@ -727,26 +723,15 @@ export function Globe({
   // that zooms (and suspends rotation). The pointer count in pointersRef is
   // the single source of truth for which mode we're in.
 
-  const makeDragProjection = (rot) => {
-    const d3 = d3Ref.current
-    if (!d3 || !projectionData) return null
-    return d3
-      .geoOrthographic()
-      .translate([size.width / 2, size.height / 2])
-      .scale(projectionData.radius)
-      .clipAngle(90)
-      .rotate(rot)
-  }
-
   // Convert a live DOM pointer into the versor anchor that owns the whole
   // gesture. Pointer-down and pinch handoff both call this before the next
   // move, so no real movement is ever consumed merely establishing a baseline.
-  const dragAnchorAtPointer = (clientX, clientY, node, rotationAtGrab) => {
+  const dragAnchorAtPointer = (clientX, clientY, node) => {
     if (!projectionData || !node) return null
     const rect = node.getBoundingClientRect()
     return createVersorDragAnchor({
-      makeProjection: makeDragProjection,
-      rotation: rotationAtGrab,
+      projection: projectionData.projection,
+      rotation,
       px: clientX - rect.left,
       py: clientY - rect.top,
       cx: size.width / 2,
@@ -759,8 +744,8 @@ export function Globe({
   // rotation continues from where the finger is — without this, lifting one
   // finger after a pinch would snap the globe by the accumulated delta.
   const reseatDrag = (pointer, node) => {
-    const startRotate = rotationRef.current.slice()
-    const anchor = dragAnchorAtPointer(pointer.x, pointer.y, node, startRotate)
+    const startRotate = rotation.slice()
+    const anchor = dragAnchorAtPointer(pointer.x, pointer.y, node)
     dragRef.current = {
       active: true,
       moved: true, // a pinch happened; never treat the lift-off as a tap
@@ -807,6 +792,10 @@ export function Globe({
     cancelInertia()
     cancelZoomGlide()
     cancelRotationFrame()
+    // A new gesture anchors to the pose actually on screen. This also drops a
+    // sub-frame ref update from an interrupted glide instead of jumping to a
+    // rotation the user never saw.
+    rotationRef.current = rotation
     velocityRef.current.samples = []
     pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY })
     event.currentTarget.setPointerCapture?.(event.pointerId)
@@ -815,7 +804,6 @@ export function Globe({
       // moved so the gesture can't end in a tap).
       dragRef.current.active = false
       dragRef.current.moved = true
-      beginDragMotion()
       pinchRef.current = {
         active: true,
         startDist: pinchSpread(pointersRef.current) || 1,
@@ -826,13 +814,8 @@ export function Globe({
       // Drag-rotate is only promoted to "moving" after the tap threshold in
       // onPointerMove. A plain country tap should not trigger a projection
       // precision swap before the click/selection resolves.
-      const startRotate = rotationRef.current.slice()
-      const anchor = dragAnchorAtPointer(
-        event.clientX,
-        event.clientY,
-        event.currentTarget,
-        startRotate,
-      )
+      const startRotate = rotation.slice()
+      const anchor = dragAnchorAtPointer(event.clientX, event.clientY, event.currentTarget)
       dragRef.current = {
         active: true,
         moved: false,
@@ -887,19 +870,13 @@ export function Globe({
       const cx = size.width / 2
       const cy = size.height / 2
       const radius = projectionData.radius
-      const makeProjection = makeDragProjection
-      // Defensive fallback for a projection that became ready after pointer-
-      // down. The rendered globe normally anchors on pointer-down; this keeps an
-      // unusual mid-gesture readiness transition usable without a second path.
-      if (!drag.v0) {
-        const anchor = dragAnchorAtPointer(
-          event.clientX,
-          event.clientY,
-          event.currentTarget,
-          rotationRef.current,
-        )
-        if (anchor) Object.assign(drag, anchor)
-      }
+      const makeProjection = (rot) =>
+        d3
+          .geoOrthographic()
+          .translate([cx, cy])
+          .scale(radius)
+          .clipAngle(90)
+          .rotate(rot)
       if (drag.v0) {
         const next = solveVersorDrag({
           makeProjection,
@@ -970,7 +947,7 @@ export function Globe({
       cancelRotationFrame()
       startInertia()
     } else {
-      endDragMotion()
+      setDragMotionActive(false)
       if (event?.type === 'pointerup') handledTap = resolveTapFromPoint(event)
     }
     velocityRef.current.samples = []

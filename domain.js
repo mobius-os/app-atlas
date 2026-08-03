@@ -228,11 +228,10 @@ export function easePointerToDisc(px, py, cx, cy, radius) {
 // the anchor belongs to pointer-down, while the first displaced pointer-move
 // must already produce a rotation. Capturing on that first move instead would
 // consume it as setup and make every newly settled globe feel briefly stuck.
-export function createVersorDragAnchor({ makeProjection, rotation, px, py, cx, cy, radius }) {
-  if (typeof makeProjection !== 'function' || !Array.isArray(rotation)) return null
+export function createVersorDragAnchor({ projection, rotation, px, py, cx, cy, radius }) {
+  if (!projection?.invert || !Array.isArray(rotation)) return null
   const [gx, gy] = easePointerToDisc(px, py, cx, cy, radius)
-  const projection = makeProjection(rotation)
-  const grab = projection?.invert?.([gx, gy])
+  const grab = projection.invert([gx, gy])
   if (!grab || !Number.isFinite(grab[0]) || !Number.isFinite(grab[1])) return null
   const startRotate = rotation.slice()
   return {

@@ -284,7 +284,7 @@ test('a versor anchor captured at pointer-down makes the first displaced move ro
   const rotation = [0, 0, 0]
   const makeProjection = makeOrtho(cx, cy, radius)
   const anchor = createVersorDragAnchor({
-    makeProjection,
+    projection: makeProjection(rotation),
     rotation,
     px: cx + 10,
     py: cy,
