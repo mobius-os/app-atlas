@@ -110,19 +110,15 @@ export function Globe({
   const [earthPainted, setEarthPainted] = useState(false)
   const [earthRendererReady, setEarthRendererReady] = useState(false)
   const [earthAttempt, setEarthAttempt] = useState(0)
-  // True while a drag or release-glide is in flight. Flips at most twice per
-  // gesture (grab → true, rest → false) — NOT per frame — so it costs no extra
-  // renders, and lets the projection drop precision while the globe moves: a
-  // coarser geoPath tessellation is cheaper to build + paint on every frame,
-  // and the detail it skips is invisible on a spinning sphere. The crisp path
-  // snaps back the instant motion settles.
+  // True while drag/inertia or zoom is moving. With the photo renderer active,
+  // motion updates only that cheap layer; country hit paths refresh at rest.
+  // The SVG fallback still updates its countries every frame.
   const [spinning, setSpinning] = useState(false)
   const spinningRef = useRef(false)
   // Recompute the public spinning flag from its two sources (drag/inertia and
   // zoom glide) and push it to state only when it actually flips. Motion-start
-  // callers invoke this in the SAME callback as the first changed rotation or
-  // zoom, so the coarse-detail switch never redraws a stationary globe before
-  // the first visible movement. Whichever source settles last repaints crisp.
+  // callers invoke this beside the first changed rotation or zoom, so the
+  // overlay is deferred in the same render that moves the photograph.
   const syncSpinning = useCallback(() => {
     const on = inertiaActiveRef.current || zoomGlideActiveRef.current
     if (spinningRef.current === on) return
@@ -621,15 +617,17 @@ export function Globe({
     return { projection, path, radius }
   }, [ready, rotation, zoom, size.height, size.width, spinning])
 
-  // Per-frame rendering stays out of React reconciliation. Dragging used to
-  // rebuild ~195 country elements in JSX every rAF; now React owns structure
-  // and state classes, while this layout effect only mutates the path data that
-  // actually changes with rotation/zoom. That keeps the globe responsive on
-  // embedded WebViews where SVG diffing is the expensive part.
+  // The photo is a complete globe during motion; its SVG hit overlay can wait.
+  const countryOverlayDeferred = spinning && earthPainted
+
+  // Refresh the full overlay before the browser reveals it at rest. Without
+  // WebGL, countryOverlayDeferred stays false and this remains the render path.
   useLayoutEffect(() => {
     if (!projectionData) return
     const sphere = projectionData.path({ type: 'Sphere' }) || ''
     sphereRef.current?.setAttribute('d', sphere)
+
+    if (countryOverlayDeferred) return
 
     for (const country of renderCountries) {
       const node = countryPathRefs.current.get(country.iso3)
@@ -647,7 +645,7 @@ export function Globe({
         node.style.display = 'none'
       }
     }
-  }, [projectionData, renderCountries])
+  }, [projectionData, renderCountries, countryOverlayDeferred])
 
   // Repaint the photographic world whenever d3 changes the projection. One
   // cheap WebGL draw keeps the canvas locked to the SVG through drag, inertia,
@@ -1035,7 +1033,11 @@ export function Globe({
         <div className="cb-globe-loading">Loading the world…</div>
       ) : (
         <svg
-          className={'cb-globe-svg' + (earthPainted ? ' cb-globe-svg--earth' : '')}
+          className={
+            'cb-globe-svg' +
+            (earthPainted ? ' cb-globe-svg--earth' : '') +
+            (spinning ? ' cb-globe-svg--moving' : '')
+          }
           viewBox={`0 0 ${size.width} ${size.height}`}
           tabIndex={0}
           aria-label="Globe — drag to spin, pinch or +/- to zoom"
@@ -1100,7 +1102,7 @@ export function Globe({
              and hover tooltips surface the name on desktop. tabIndex and
              a keyboard handler make small-country selection reachable
              without a sub-pixel tap. */}
-          {countryNodes}
+          <g className="cb-country-layer">{countryNodes}</g>
 
         </svg>
       )}

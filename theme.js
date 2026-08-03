@@ -346,6 +346,12 @@ export const CSS = `
 .cb-earth-canvas.is-painted {
   opacity: 1;
 }
+/* The photo is complete during motion, so hide its settled SVG hit overlay.
+   Globe.jsx refreshes the paths before this class drops at rest. Requiring the
+   Earth layer preserves the fully animated SVG fallback. */
+.cb-globe-svg--earth.cb-globe-svg--moving .cb-country-layer {
+  visibility: hidden;
+}
 /* Suppress the outline only for mouse/touch focus; the shared Focus
    block below still paints a ring for keyboard (:focus-visible) users. */
 .cb-globe-svg:focus:not(:focus-visible) {
