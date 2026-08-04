@@ -3,9 +3,9 @@ import assert from 'node:assert/strict'
 
 // These are all PURE functions, exported from domain.js (no React, no d3-geo,
 // no DOM). domain.js imports only ./constants.js (bundled data), so plain Node
-// ESM resolves it directly — no esbuild bundle step, no host-absolute paths,
+// ESM resolves it directly — no Rolldown bundle step, no host-absolute paths,
 // no runtime externals. (The previous version shelled out to a hard-coded
-// /home/... esbuild to bundle index.jsx first; that made `npm test` non-
+// /home/... bundler binary to bundle index.jsx first; that made `npm test` non-
 // portable and broke on any fresh clone / CI. index.jsx re-exports these same
 // domain functions, so importing the source module is equivalent and portable.)
 // solveVersorDrag is exercised below against an inline orthographic projection,

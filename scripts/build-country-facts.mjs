@@ -21,7 +21,7 @@
 //
 // Run:  node scripts/build-country-facts.mjs
 // country-facts.json is committed as the human-readable regeneration source,
-// but Möbius mini-apps compile to a SINGLE file at install (esbuild on
+// but Möbius mini-apps compile to a SINGLE file at install (Rolldown on
 // index.jsx alone — sibling imports don't resolve), so the LIVE data must be
 // inlined in constants.js. This script therefore also rewrites the
 // `const COUNTRY_FACTS = {...}` between the COUNTRY_FACTS:BEGIN/END markers in

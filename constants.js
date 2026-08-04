@@ -1,7 +1,7 @@
 // Per-country basic facts (capital / population / surface area / languages),
 // keyed by ISO-3 under short keys { cap, pop, area, lang }. BUNDLED at build
 // time from world-countries + country-json (see scripts/build-country-facts.mjs).
-// Möbius mini-apps compile to a SINGLE file at install — esbuild runs on this
+// Möbius mini-apps compile to a SINGLE file at install — Rolldown runs on this
 // index.jsx alone with only importmap deps external, so relative/sibling
 // imports (e.g. ./country-facts.json) cannot resolve and the install fails with
 // "Could not resolve". The data therefore lives INLINE here as a const, not as

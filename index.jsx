@@ -1,5 +1,5 @@
 // Atlas — thin app shell. The module tree is declared in mobius.json's
-// source_files; the multi-file installer fetches each path and esbuild bundles
+// source_files; the multi-file installer fetches each path and Rolldown bundles
 // from this entry, resolving the relative imports below at compile time.
 //
 //   constants.js  — bundled country facts, hero sayings, and nav state constants
