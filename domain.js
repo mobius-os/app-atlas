@@ -437,7 +437,15 @@ export function toIsoSet(values) {
 // the row teleported toward the top. Stable order keeps the row exactly
 // where it was; the status filter (see filterCountriesByStatus) is how the
 // user asks for "just my visited" instead.
-export function orderCountriesForList(countries, query = '') {
+export const COUNTRY_SORTS = ['alphabetical', 'continent']
+export const CONTINENT_ORDER = ['Africa', 'Americas', 'Asia', 'Europe', 'Oceania']
+
+const continentRank = (region) => {
+  const index = CONTINENT_ORDER.indexOf(region)
+  return index === -1 ? CONTINENT_ORDER.length : index
+}
+
+export function orderCountriesForList(countries, query = '', sort = 'alphabetical') {
   if (!Array.isArray(countries)) return []
   const text = soften(query)
   return countries
@@ -456,12 +464,36 @@ export function orderCountriesForList(countries, query = '') {
         .some((value) => soften(value).includes(text))
     })
     .sort((a, b) => {
+      if (sort === 'continent') {
+        const regionOrder = continentRank(a.region) - continentRank(b.region)
+        if (regionOrder !== 0) return regionOrder
+        const regionNameOrder = String(a.region || 'Other').localeCompare(String(b.region || 'Other'))
+        if (regionNameOrder !== 0) return regionNameOrder
+      }
       const an = String(a.displayName || a.name || a.iso3 || '')
       const bn = String(b.displayName || b.name || b.iso3 || '')
       const nameOrder = an.localeCompare(bn)
       if (nameOrder !== 0) return nameOrder
       return String(a.iso3 || '').localeCompare(String(b.iso3 || ''))
     })
+}
+
+// One stable row per continent, including continents with no current search or
+// filter matches. `total` always describes the complete atlas while `visited`
+// is derived from the persisted visited set, so the summary never changes its
+// denominator when the list is narrowed.
+export function continentVisitStats(countries, visitedValues = new Set()) {
+  const visited = toIsoSet(visitedValues)
+  const byName = new Map(CONTINENT_ORDER.map((name) => [name, { name, visited: 0, total: 0 }]))
+  for (const country of Array.isArray(countries) ? countries : []) {
+    if (!country || typeof country !== 'object') continue
+    const name = country.region || 'Other'
+    if (!byName.has(name)) byName.set(name, { name, visited: 0, total: 0 })
+    const row = byName.get(name)
+    row.total += 1
+    if (visited.has(country.iso3)) row.visited += 1
+  }
+  return Array.from(byName.values()).filter((row) => row.total > 0)
 }
 
 // The three status filters the chips offer. 'all' is the resting state.
@@ -485,6 +517,18 @@ export function filterCountriesByStatus(countries, filter, visitedValues = new S
     )
   }
   return countries
+}
+
+// An empty continent selection means "all continents". Once one or more cards
+// are active, the list is the union of those regions so the cards compose as a
+// true multi-select filter rather than replacing one another.
+export function filterCountriesByContinents(countries, selectedValues = new Set()) {
+  if (!Array.isArray(countries)) return []
+  const selected = new Set(
+    Array.from(selectedValues || []).map((value) => String(value || '').trim()).filter(Boolean),
+  )
+  if (selected.size === 0) return countries
+  return countries.filter((country) => selected.has(country?.region || 'Other'))
 }
 
 // Describe the Reflection signal a status toggle should emit, given the

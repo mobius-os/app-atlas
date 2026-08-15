@@ -26,9 +26,12 @@ import {
 } from './storage.js'
 import {
   STATUS_FILTERS,
+  COUNTRY_SORTS,
+  continentVisitStats,
   classifyStatusToggle,
   dedupeCountries,
   filterCountriesByStatus,
+  filterCountriesByContinents,
   mergeCodeSets,
   orderCountriesForList,
   pickRotatingSaying,
@@ -66,6 +69,8 @@ export {
   angularStepDeg,
   easePointerToDisc,
   filterCountriesByStatus,
+  filterCountriesByContinents,
+  continentVisitStats,
   formatArea,
   formatLanguages,
   formatPopulation,
@@ -127,6 +132,11 @@ export default function Atlas({ appId, token }) {
     const saved = prefRead(appId, 'status-filter')
     return STATUS_FILTERS.includes(saved) ? saved : 'all'
   })
+  const [countrySort, setCountrySort] = useState(() => {
+    const saved = prefRead(appId, 'country-sort')
+    return COUNTRY_SORTS.includes(saved) ? saved : 'alphabetical'
+  })
+  const [selectedContinents, setSelectedContinents] = useState(() => new Set())
   const [error, setError] = useState('')
   // Track online status so the SyncPill can announce offline mode.
   const [online, setOnline] = useState(
@@ -250,12 +260,36 @@ export default function Atlas({ appId, token }) {
   }, [loading, visitedDoc.status, wishlistDoc.status, countries.length, visited.size, wishlist.size])
 
   // ----- derived list (ordered, then narrowed) --------------------------
-  // Order is alphabetical and never depends on marking — see
-  // orderCountriesForList. The status filter narrows; it doesn't re-sort.
+  // Ordering never depends on marking. The optional continent order groups
+  // regions while keeping country names alphabetical inside each group.
   const filteredCountries = useMemo(() => {
-    const ordered = orderCountriesForList(countries, query)
-    return filterCountriesByStatus(ordered, statusFilter, visited, wishlist)
-  }, [countries, query, statusFilter, visited, wishlist])
+    const ordered = orderCountriesForList(countries, query, countrySort)
+    const byStatus = filterCountriesByStatus(ordered, statusFilter, visited, wishlist)
+    return filterCountriesByContinents(byStatus, selectedContinents)
+  }, [countries, query, countrySort, statusFilter, visited, wishlist, selectedContinents])
+
+  const continentStats = useMemo(
+    () => continentVisitStats(countries, visited),
+    [countries, visited],
+  )
+
+  const changeCountrySort = useCallback(
+    (next) => {
+      if (!COUNTRY_SORTS.includes(next)) return
+      setCountrySort(next)
+      prefWrite(appId, 'country-sort', next)
+    },
+    [appId],
+  )
+
+  const toggleContinent = useCallback((continent) => {
+    setSelectedContinents((current) => {
+      const next = new Set(current)
+      if (next.has(continent)) next.delete(continent)
+      else next.add(continent)
+      return next
+    })
+  }, [])
 
   const changeStatusFilter = useCallback(
     (next) => {
@@ -264,11 +298,11 @@ export default function Atlas({ appId, token }) {
       prefWrite(appId, 'status-filter', next)
       // filter_changed (Reflection) — result_count is the size of the list the
       // new filter yields, so an unused or always-zero-result filter is visible.
-      const ordered = orderCountriesForList(countries, query)
+      const ordered = orderCountriesForList(countries, query, countrySort)
       const resultCount = filterCountriesByStatus(ordered, next, visited, wishlist).length
       emitSignal('filter_changed', { filter: next, result_count: resultCount })
     },
-    [appId, countries, query, visited, wishlist],
+    [appId, countries, query, countrySort, visited, wishlist],
   )
 
   // Surface a durable-write failure. doc.lastError is shared by reads AND
@@ -528,6 +562,41 @@ export default function Atlas({ appId, token }) {
     [applyToggle],
   )
 
+  // Multi-select commits a whole batch with one update per document. This is
+  // deliberately a SET operation (mark every selected country as Been / Want
+  // to go), not N independent toggles: already-matching countries stay marked
+  // and rapid bulk actions cannot accidentally flip them off.
+  const setCountriesStatus = useCallback(
+    (selectedCountries, status) => {
+      const codes = new Set(
+        (Array.isArray(selectedCountries) ? selectedCountries : [])
+          .map((country) => typeof country === 'string' ? country : country?.iso3)
+          .filter(Boolean),
+      )
+      if (codes.size === 0 || (status !== 'visited' && status !== 'wishlist')) return
+      setWriteError('')
+      const nextVisited = toIsoSet(visitedDoc.value)
+      const nextWishlist = toIsoSet(wishlistDoc.value)
+      for (const code of codes) {
+        if (status === 'visited') {
+          nextVisited.add(code)
+          nextWishlist.delete(code)
+        } else {
+          nextWishlist.add(code)
+          nextVisited.delete(code)
+        }
+      }
+      visitedDoc.update(() => Array.from(nextVisited)).catch(() => {
+        setWriteError("Couldn't save the selected countries — try again.")
+      })
+      wishlistDoc.update(() => Array.from(nextWishlist)).catch(() => {
+        setWriteError("Couldn't save the selected countries — try again.")
+      })
+      emitSignal('bulk_status_changed', { status, item_count: codes.size })
+    },
+    [visitedDoc, wishlistDoc],
+  )
+
   // Tap on globe OR list row — select + open detail view. NEVER
   // toggles. The detail view's primary CTA is the only path to commit
   // a visited/not-visited change.
@@ -672,12 +741,18 @@ export default function Atlas({ appId, token }) {
           selectedCountry={selectedCountry}
           query={query}
           statusFilter={statusFilter}
+          countrySort={countrySort}
+          continentStats={continentStats}
+          selectedContinents={selectedContinents}
           loading={loading}
           onQueryChange={setQuery}
           onFilterChange={changeStatusFilter}
+          onSortChange={changeCountrySort}
+          onToggleContinent={toggleContinent}
           onSelect={selectCountry}
           onToggleVisited={toggleVisited}
           onToggleWishlist={toggleWishlist}
+          onSetCountriesStatus={setCountriesStatus}
           onDeselect={deselect}
         />
       </main>
