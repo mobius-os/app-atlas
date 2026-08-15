@@ -14,6 +14,9 @@ import {
   PREF_KEY,
   ROTATION_SINGULARITY_LAT,
   STATUS_FILTERS,
+  COUNTRY_SORTS,
+  CONTINENT_ORDER,
+  continentVisitStats,
   angularStepDeg,
   classifyStatusToggle,
   createVersorDragAnchor,
@@ -121,6 +124,28 @@ test('orderCountriesForList orders alphabetically with an iso3 tiebreak', () => 
     'BBB',
     'USA',
   ])
+})
+
+test('continent sorting groups continents and keeps names alphabetical inside each group', () => {
+  const sample = countries.slice(0, 4)
+  const ordered = orderCountriesForList(sample, '', 'continent')
+  assert.deepEqual(
+    ordered.map((country) => country.region),
+    ['Americas', 'Americas', 'Americas', 'Asia'],
+  )
+  assert.deepEqual(ordered.map((country) => country.iso3), ['BRA', 'CAN', 'USA', 'JPN'])
+  assert.deepEqual(COUNTRY_SORTS, ['alphabetical', 'continent'])
+  assert.deepEqual(CONTINENT_ORDER, ['Africa', 'Americas', 'Asia', 'Europe', 'Oceania'])
+})
+
+test('continentVisitStats reports visited and total counts by continent', () => {
+  assert.deepEqual(
+    continentVisitStats(countries.slice(0, 4), new Set(['USA', 'JPN'])),
+    [
+      { name: 'Americas', visited: 1, total: 3 },
+      { name: 'Asia', visited: 1, total: 1 },
+    ],
+  )
 })
 
 test('orderCountriesForList filters sparse data and searches names, regions, and iso codes', () => {
