@@ -22,6 +22,7 @@ import {
   createVersorDragAnchor,
   easePointerToDisc,
   filterCountriesByStatus,
+  filterCountriesByContinents,
   formatArea,
   formatLanguages,
   formatPopulation,
@@ -196,6 +197,16 @@ test('filterCountriesByStatus narrows to visited or wishlist and passes everythi
 test('filterCountriesByStatus gives visited priority when a malformed persisted wishlist also contains the country', () => {
   const wishlistOnly = filterCountriesByStatus(countries, 'wishlist', ['USA'], ['USA', 'CAN'])
   assert.deepEqual(wishlistOnly.map((c) => c.iso3), ['CAN'])
+})
+
+test('filterCountriesByContinents composes multiple selected continent cards', () => {
+  const selected = new Set(['Americas', 'Asia'])
+  assert.deepEqual(
+    filterCountriesByContinents(countries, selected).map((country) => country.iso3),
+    ['USA', 'CAN', 'JPN', 'BRA'],
+  )
+  assert.equal(filterCountriesByContinents(countries, new Set()), countries)
+  assert.deepEqual(filterCountriesByContinents(undefined, selected), [])
 })
 
 test('STATUS_FILTERS lists the three chip states with all first', () => {

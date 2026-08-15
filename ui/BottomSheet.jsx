@@ -73,10 +73,12 @@ export function BottomSheet({
   statusFilter,
   countrySort,
   continentStats,
+  selectedContinents,
   loading,
   onQueryChange,
   onFilterChange,
   onSortChange,
+  onToggleContinent,
   onSelect,
   onToggleVisited,
   onToggleWishlist,
@@ -470,15 +472,22 @@ export function BottomSheet({
             className={'cb-select-toggle' + (selecting ? ' is-on' : '')}
             aria-pressed={selecting}
             onClick={() => selecting ? finishSelecting() : setSelecting(true)}
-          >{selecting ? 'Cancel' : 'Select'}</button>
+          >{selecting ? 'Cancel' : 'Select multiple'}</button>
         </div>
 
-        <div className="cb-continent-stats" aria-label="Countries visited by continent">
+        <div className="cb-continent-stats" role="group" aria-label="Filter by continent">
           {continentStats.map((stat) => (
-            <span className="cb-continent-stat" key={stat.name}>
+            <button
+              type="button"
+              className={'cb-continent-stat' + (selectedContinents.has(stat.name) ? ' is-on' : '')}
+              key={stat.name}
+              aria-pressed={selectedContinents.has(stat.name)}
+              aria-label={`${stat.name}, ${stat.visited} of ${stat.total} visited`}
+              onClick={() => onToggleContinent(stat.name)}
+            >
               <strong>{stat.name}</strong>
               <span>{stat.visited}/{stat.total}</span>
-            </span>
+            </button>
           ))}
         </div>
 

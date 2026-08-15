@@ -4,7 +4,7 @@ export const CSS = `
 /* mobius-ui:NativeTouch v1 — keep in sync; library candidate. Diverge below the marker only. */
 * { -webkit-tap-highlight-color: transparent; }
 .cb-sheet-handle, .cb-detail-cta, .cb-detail-close, .cb-sheet-search-clear, .cb-row-open,
-.cb-filter, .cb-sort button, .cb-select-toggle, .cb-bulk-bar button {
+.cb-filter, .cb-sort button, .cb-select-toggle, .cb-continent-stat, .cb-bulk-bar button {
   touch-action: manipulation;
 }
 .cb-header, .cb-counter, .cb-pill, .cb-detail-flag, .cb-row-flag {
@@ -641,27 +641,35 @@ export const CSS = `
 .cb-select-toggle.is-on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, var(--cb-border)); }
 .cb-continent-stats {
   flex: 0 0 auto;
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px;
-  overflow-x: auto;
-  scrollbar-width: none;
   padding: 0 14px 8px;
 }
-.cb-continent-stats::-webkit-scrollbar { display: none; }
 .cb-continent-stat {
-  flex: 0 0 auto;
-  display: inline-flex;
+  min-width: 0;
+  min-height: 44px;
+  display: flex;
   align-items: baseline;
+  justify-content: space-between;
   gap: 6px;
-  padding: 5px 9px;
+  padding: 7px 9px;
   border: 1px solid color-mix(in srgb, var(--cb-border) 70%, transparent);
-  border-radius: 999px;
+  border-radius: 10px;
   background: color-mix(in srgb, var(--surface) 62%, transparent);
-  font-size: 10.5px;
   color: var(--muted);
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
 }
-.cb-continent-stat strong { color: var(--text); font-weight: 600; }
+.cb-continent-stat strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text); font-weight: 600; }
 .cb-continent-stat span { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.cb-continent-stat.is-on {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--cb-border));
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+}
+.cb-continent-stat.is-on strong,
+.cb-continent-stat.is-on span { color: var(--accent); }
 .cb-filters {
   flex: 0 0 auto;
   display: flex;
@@ -1261,6 +1269,9 @@ export const CSS = `
   .cb-sheet-controls {
     flex-direction: column;
     margin: 14px 14px 12px;
+  }
+  .cb-continent-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .cb-filters {
     display: grid;

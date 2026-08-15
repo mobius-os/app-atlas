@@ -31,6 +31,7 @@ import {
   classifyStatusToggle,
   dedupeCountries,
   filterCountriesByStatus,
+  filterCountriesByContinents,
   mergeCodeSets,
   orderCountriesForList,
   pickRotatingSaying,
@@ -68,6 +69,7 @@ export {
   angularStepDeg,
   easePointerToDisc,
   filterCountriesByStatus,
+  filterCountriesByContinents,
   continentVisitStats,
   formatArea,
   formatLanguages,
@@ -134,6 +136,7 @@ export default function Atlas({ appId, token }) {
     const saved = prefRead(appId, 'country-sort')
     return COUNTRY_SORTS.includes(saved) ? saved : 'alphabetical'
   })
+  const [selectedContinents, setSelectedContinents] = useState(() => new Set())
   const [error, setError] = useState('')
   // Track online status so the SyncPill can announce offline mode.
   const [online, setOnline] = useState(
@@ -261,8 +264,9 @@ export default function Atlas({ appId, token }) {
   // regions while keeping country names alphabetical inside each group.
   const filteredCountries = useMemo(() => {
     const ordered = orderCountriesForList(countries, query, countrySort)
-    return filterCountriesByStatus(ordered, statusFilter, visited, wishlist)
-  }, [countries, query, countrySort, statusFilter, visited, wishlist])
+    const byStatus = filterCountriesByStatus(ordered, statusFilter, visited, wishlist)
+    return filterCountriesByContinents(byStatus, selectedContinents)
+  }, [countries, query, countrySort, statusFilter, visited, wishlist, selectedContinents])
 
   const continentStats = useMemo(
     () => continentVisitStats(countries, visited),
@@ -277,6 +281,15 @@ export default function Atlas({ appId, token }) {
     },
     [appId],
   )
+
+  const toggleContinent = useCallback((continent) => {
+    setSelectedContinents((current) => {
+      const next = new Set(current)
+      if (next.has(continent)) next.delete(continent)
+      else next.add(continent)
+      return next
+    })
+  }, [])
 
   const changeStatusFilter = useCallback(
     (next) => {
@@ -730,10 +743,12 @@ export default function Atlas({ appId, token }) {
           statusFilter={statusFilter}
           countrySort={countrySort}
           continentStats={continentStats}
+          selectedContinents={selectedContinents}
           loading={loading}
           onQueryChange={setQuery}
           onFilterChange={changeStatusFilter}
           onSortChange={changeCountrySort}
+          onToggleContinent={toggleContinent}
           onSelect={selectCountry}
           onToggleVisited={toggleVisited}
           onToggleWishlist={toggleWishlist}

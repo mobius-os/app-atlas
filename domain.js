@@ -519,6 +519,18 @@ export function filterCountriesByStatus(countries, filter, visitedValues = new S
   return countries
 }
 
+// An empty continent selection means "all continents". Once one or more cards
+// are active, the list is the union of those regions so the cards compose as a
+// true multi-select filter rather than replacing one another.
+export function filterCountriesByContinents(countries, selectedValues = new Set()) {
+  if (!Array.isArray(countries)) return []
+  const selected = new Set(
+    Array.from(selectedValues || []).map((value) => String(value || '').trim()).filter(Boolean),
+  )
+  if (selected.size === 0) return countries
+  return countries.filter((country) => selected.has(country?.region || 'Other'))
+}
+
 // Describe the Reflection signal a status toggle should emit, given the
 // country's CURRENT (pre-tap) membership and the status the user tapped. Pure
 // so the created / deleted / updated decision is unit-testable without a signal
