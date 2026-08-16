@@ -4,7 +4,7 @@ export const CSS = `
 /* mobius-ui:NativeTouch v1 — keep in sync; library candidate. Diverge below the marker only. */
 * { -webkit-tap-highlight-color: transparent; }
 .cb-sheet-handle, .cb-detail-cta, .cb-detail-close, .cb-sheet-search-clear, .cb-row-open,
-.cb-filter, .cb-sort button, .cb-select-toggle, .cb-continent-stat, .cb-bulk-bar button {
+.cb-filter, .cb-sort button, .cb-continent-stat {
   touch-action: manipulation;
 }
 .cb-header, .cb-counter, .cb-pill, .cb-detail-flag, .cb-row-flag {
@@ -603,7 +603,7 @@ export const CSS = `
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 8px;
   margin: 0 14px 8px;
 }
@@ -615,7 +615,7 @@ export const CSS = `
   background: var(--cb-surface);
   box-shadow: inset 0 0 0 1px var(--cb-border);
 }
-.cb-sort button, .cb-select-toggle {
+.cb-sort button {
   min-height: 36px;
   padding: 0 12px;
   border: 0;
@@ -632,37 +632,31 @@ export const CSS = `
   color: var(--text);
   box-shadow: 0 1px 3px rgb(0 0 0 / 0.18);
 }
-.cb-select-toggle {
-  min-width: 70px;
-  border: 1px solid var(--cb-border);
-  background: var(--cb-surface);
-  color: var(--text);
-}
-.cb-select-toggle.is-on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, var(--cb-border)); }
 .cb-continent-stats {
   flex: 0 0 auto;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 4px;
   padding: 0 14px 8px;
 }
 .cb-continent-stat {
   min-width: 0;
   min-height: 44px;
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 6px;
-  padding: 7px 9px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 5px 3px;
   border: 1px solid color-mix(in srgb, var(--cb-border) 70%, transparent);
   border-radius: 10px;
   background: color-mix(in srgb, var(--surface) 62%, transparent);
   color: var(--muted);
   font: inherit;
-  font-size: 10.5px;
+  font-size: 9px;
   cursor: pointer;
 }
-.cb-continent-stat strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text); font-weight: 600; }
+.cb-continent-stat strong { max-width: 100%; overflow: hidden; text-overflow: ellipsis; color: var(--text); font-weight: 600; }
 .cb-continent-stat span { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .cb-continent-stat.is-on {
   border-color: color-mix(in srgb, var(--accent) 60%, var(--cb-border));
@@ -999,43 +993,6 @@ export const CSS = `
   color: var(--text);
   transition: background 160ms ease, border-color 160ms ease;
 }
-.cb-row--selected {
-  border-color: color-mix(in srgb, var(--accent) 64%, var(--cb-border));
-  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
-}
-.cb-row-select {
-  width: 24px;
-  height: 24px;
-  display: grid;
-  place-items: center;
-  border-radius: 7px;
-  border: 1.5px solid color-mix(in srgb, var(--muted) 65%, transparent);
-  color: var(--accent-fg);
-}
-.cb-row-select.is-on { background: var(--accent); border-color: var(--accent); }
-.cb-bulk-bar {
-  flex: 0 0 auto;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
-  padding: 8px 14px max(8px, env(safe-area-inset-bottom));
-  border-top: 1px solid var(--cb-border);
-  background: var(--cb-surface-strong);
-}
-.cb-bulk-bar > span { color: var(--muted); font-size: 11px; font-family: var(--mono); white-space: nowrap; }
-.cb-bulk-bar button {
-  min-height: 44px;
-  padding: 0 10px;
-  border-radius: 10px;
-  border: 1px solid var(--cb-border);
-  background: var(--surface2, var(--surface));
-  color: var(--text);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 650;
-}
-.cb-bulk-bar button:disabled { opacity: 0.45; }
 .cb-row-open {
   flex: 1 1 auto;
   min-width: 0;
@@ -1271,7 +1228,10 @@ export const CSS = `
     margin: 14px 14px 12px;
   }
   .cb-continent-stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+  .cb-continent-stat {
+    font-size: 9.5px;
   }
   .cb-filters {
     display: grid;
