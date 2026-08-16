@@ -437,15 +437,9 @@ export function toIsoSet(values) {
 // the row teleported toward the top. Stable order keeps the row exactly
 // where it was; the status filter (see filterCountriesByStatus) is how the
 // user asks for "just my visited" instead.
-export const COUNTRY_SORTS = ['alphabetical', 'continent']
 export const CONTINENT_ORDER = ['Africa', 'Americas', 'Asia', 'Europe', 'Oceania']
 
-const continentRank = (region) => {
-  const index = CONTINENT_ORDER.indexOf(region)
-  return index === -1 ? CONTINENT_ORDER.length : index
-}
-
-export function orderCountriesForList(countries, query = '', sort = 'alphabetical') {
+export function orderCountriesForList(countries, query = '') {
   if (!Array.isArray(countries)) return []
   const text = soften(query)
   return countries
@@ -464,12 +458,6 @@ export function orderCountriesForList(countries, query = '', sort = 'alphabetica
         .some((value) => soften(value).includes(text))
     })
     .sort((a, b) => {
-      if (sort === 'continent') {
-        const regionOrder = continentRank(a.region) - continentRank(b.region)
-        if (regionOrder !== 0) return regionOrder
-        const regionNameOrder = String(a.region || 'Other').localeCompare(String(b.region || 'Other'))
-        if (regionNameOrder !== 0) return regionNameOrder
-      }
       const an = String(a.displayName || a.name || a.iso3 || '')
       const bn = String(b.displayName || b.name || b.iso3 || '')
       const nameOrder = an.localeCompare(bn)

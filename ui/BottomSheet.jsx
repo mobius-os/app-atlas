@@ -71,43 +71,21 @@ export function BottomSheet({
   selectedCountry,
   query,
   statusFilter,
-  countrySort,
   continentStats,
   selectedContinents,
   loading,
   onQueryChange,
   onFilterChange,
-  onSortChange,
   onToggleContinent,
   onSelect,
   onToggleVisited,
   onToggleWishlist,
-  onSetCountriesStatus,
   onDeselect,
 }) {
   const dragRef = useRef({ active: false, startY: 0, startFrac: SHEET_OPEN_DEFAULT, fromBody: false })
   const [frac, setFrac] = useState(SHEET_OPEN_DEFAULT)
   const [dragging, setDragging] = useState(false)
-  const [selecting, setSelecting] = useState(false)
-  const [selectedCodes, setSelectedCodes] = useState(() => new Set())
   const scrollRef = useRef(null)
-
-  const toggleSelected = (iso3) => {
-    setSelectedCodes((current) => {
-      const next = new Set(current)
-      if (next.has(iso3)) next.delete(iso3)
-      else next.add(iso3)
-      return next
-    })
-  }
-  const finishSelecting = () => {
-    setSelecting(false)
-    setSelectedCodes(new Set())
-  }
-  const applySelected = (status) => {
-    onSetCountriesStatus(Array.from(selectedCodes), status)
-    finishSelecting()
-  }
 
   // country_search (Reflection) — emitted after the query settles (debounced),
   // never per keystroke, so zero-result search patterns are visible. We send
@@ -452,29 +430,6 @@ export function BottomSheet({
           </div>
         </div>
 
-        <div className="cb-list-tools">
-          <div className="cb-sort" role="group" aria-label="Sort countries">
-            <button
-              type="button"
-              className={countrySort === 'alphabetical' ? 'is-on' : ''}
-              aria-pressed={countrySort === 'alphabetical'}
-              onClick={() => onSortChange('alphabetical')}
-            >A–Z</button>
-            <button
-              type="button"
-              className={countrySort === 'continent' ? 'is-on' : ''}
-              aria-pressed={countrySort === 'continent'}
-              onClick={() => onSortChange('continent')}
-            >Continents</button>
-          </div>
-          <button
-            type="button"
-            className={'cb-select-toggle' + (selecting ? ' is-on' : '')}
-            aria-pressed={selecting}
-            onClick={() => selecting ? finishSelecting() : setSelecting(true)}
-          >{selecting ? 'Cancel' : 'Select multiple'}</button>
-        </div>
-
         <div className="cb-continent-stats" role="group" aria-label="Filter by continent">
           {continentStats.map((stat) => (
             <button
@@ -541,43 +496,25 @@ export function BottomSheet({
               </div>
             )
           ) : (
-            countries.map((country, index) => {
+            countries.map((country) => {
               const isVisited = visited.has(country.iso3)
               const isWishlisted = wishlist.has(country.iso3)
-              const isSelected = selectedCodes.has(country.iso3)
-              const showContinentHead = countrySort === 'continent' &&
-                (index === 0 || countries[index - 1]?.region !== country.region)
-              const continent = continentStats.find((stat) => stat.name === country.region)
               return (
                 <div className="cb-country-block" key={country.iso3}>
-                  {showContinentHead ? (
-                    <div className="cb-continent-head">
-                      <strong>{country.region || 'Other'}</strong>
-                      <span>{continent?.visited || 0} of {continent?.total || 0} visited</span>
-                    </div>
-                  ) : null}
                   <div className={
                       'cb-row' +
                       (isVisited ? ' cb-row--visited' : '') +
-                      (isWishlisted ? ' cb-row--wishlist' : '') +
-                      (isSelected ? ' cb-row--selected' : '')
+                      (isWishlisted ? ' cb-row--wishlist' : '')
                     }>
                   <button
                     type="button"
                     className="cb-row-open"
-                    aria-label={selecting ? `${isSelected ? 'Deselect' : 'Select'} ${country.displayName}` : `Open ${country.displayName}`}
-                    aria-pressed={selecting ? isSelected : undefined}
-                    onClick={() => selecting ? toggleSelected(country.iso3) : onSelect(country)}
+                    aria-label={`Open ${country.displayName}`}
+                    onClick={() => onSelect(country)}
                   >
-                    {selecting ? (
-                      <span className={'cb-row-select' + (isSelected ? ' is-on' : '')} aria-hidden="true">
-                        {isSelected ? <StatusCheckIcon size={14} /> : null}
-                      </span>
-                    ) : (
                     <span className="cb-row-flag" aria-hidden="true">
                       {country.flag || '🏳️'}
                     </span>
-                    )}
                     <span className="cb-row-text">
                       <strong>{country.displayName}</strong>
                       <small>
@@ -591,7 +528,7 @@ export function BottomSheet({
                       propagation so they mark without opening the detail.
                       Surfacing the wishlist on the row (not just inside the
                       detail) is what makes "want to go" discoverable. */}
-                  {!selecting ? <span className="cb-row-marks">
+                  <span className="cb-row-marks">
                     <button
                       type="button"
                       className={'cb-row-want' + (isWishlisted ? ' cb-row-want--on' : '')}
@@ -626,20 +563,13 @@ export function BottomSheet({
                         {isVisited ? <StatusCheckIcon size={15} /> : null}
                       </span>
                     </button>
-                  </span> : null}
+                  </span>
                   </div>
                 </div>
               )
             })
           )}
         </div>
-        {selecting ? (
-          <div className="cb-bulk-bar" role="group" aria-label="Actions for selected countries">
-            <span>{selectedCodes.size} selected</span>
-            <button type="button" disabled={!selectedCodes.size} onClick={() => applySelected('visited')}>Mark Been</button>
-            <button type="button" disabled={!selectedCodes.size} onClick={() => applySelected('wishlist')}>Want to go</button>
-          </div>
-        ) : null}
       </div>
     </div>
   )

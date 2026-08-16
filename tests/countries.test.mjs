@@ -14,7 +14,6 @@ import {
   PREF_KEY,
   ROTATION_SINGULARITY_LAT,
   STATUS_FILTERS,
-  COUNTRY_SORTS,
   CONTINENT_ORDER,
   continentVisitStats,
   angularStepDeg,
@@ -127,15 +126,7 @@ test('orderCountriesForList orders alphabetically with an iso3 tiebreak', () => 
   ])
 })
 
-test('continent sorting groups continents and keeps names alphabetical inside each group', () => {
-  const sample = countries.slice(0, 4)
-  const ordered = orderCountriesForList(sample, '', 'continent')
-  assert.deepEqual(
-    ordered.map((country) => country.region),
-    ['Americas', 'Americas', 'Americas', 'Asia'],
-  )
-  assert.deepEqual(ordered.map((country) => country.iso3), ['BRA', 'CAN', 'USA', 'JPN'])
-  assert.deepEqual(COUNTRY_SORTS, ['alphabetical', 'continent'])
+test('continent summaries use the canonical display order', () => {
   assert.deepEqual(CONTINENT_ORDER, ['Africa', 'Americas', 'Asia', 'Europe', 'Oceania'])
 })
 
