@@ -4,7 +4,7 @@ export const CSS = `
 /* mobius-ui:NativeTouch v1 — keep in sync; library candidate. Diverge below the marker only. */
 * { -webkit-tap-highlight-color: transparent; }
 .cb-sheet-handle, .cb-detail-cta, .cb-detail-close, .cb-sheet-search-clear, .cb-row-open,
-.cb-filter, .cb-sort button, .cb-continent-stat {
+.cb-filter, .cb-continent-stat {
   touch-action: manipulation;
 }
 .cb-header, .cb-counter, .cb-pill, .cb-detail-flag, .cb-row-flag {
@@ -599,39 +599,6 @@ export const CSS = `
   gap: 8px;
   margin: 4px 14px 10px;
 }
-.cb-list-tools {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 8px;
-  margin: 0 14px 8px;
-}
-.cb-sort {
-  display: inline-flex;
-  min-height: 36px;
-  padding: 2px;
-  border-radius: 10px;
-  background: var(--cb-surface);
-  box-shadow: inset 0 0 0 1px var(--cb-border);
-}
-.cb-sort button {
-  min-height: 36px;
-  padding: 0 12px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 650;
-  cursor: pointer;
-}
-.cb-sort button.is-on {
-  background: var(--bg);
-  color: var(--text);
-  box-shadow: 0 1px 3px rgb(0 0 0 / 0.18);
-}
 .cb-continent-stats {
   flex: 0 0 auto;
   display: grid;
@@ -926,21 +893,6 @@ export const CSS = `
   -webkit-overflow-scrolling: touch;
 }
 .cb-country-block { width: 100%; }
-.cb-continent-head {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 8px 6px 6px;
-  background: color-mix(in srgb, var(--cb-surface-strong) 96%, transparent);
-  backdrop-filter: blur(12px);
-  color: var(--text);
-}
-.cb-continent-head strong { font-size: 12px; }
-.cb-continent-head span { color: var(--muted); font-family: var(--mono); font-size: 10.5px; }
 /* mobius-ui:Empty v1 — keep in sync; library candidate. Diverge below the marker only. */
 /* Three-part empty state (mark + title + subtitle) for the list — loading, no
    search match, no visited, no wishlist — replacing the old bare one-liners. */

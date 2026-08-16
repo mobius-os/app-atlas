@@ -26,7 +26,6 @@ import {
 } from './storage.js'
 import {
   STATUS_FILTERS,
-  COUNTRY_SORTS,
   continentVisitStats,
   classifyStatusToggle,
   dedupeCountries,
@@ -131,10 +130,6 @@ export default function Atlas({ appId, token }) {
   const [statusFilter, setStatusFilter] = useState(() => {
     const saved = prefRead(appId, 'status-filter')
     return STATUS_FILTERS.includes(saved) ? saved : 'all'
-  })
-  const [countrySort, setCountrySort] = useState(() => {
-    const saved = prefRead(appId, 'country-sort')
-    return COUNTRY_SORTS.includes(saved) ? saved : 'alphabetical'
   })
   const [selectedContinents, setSelectedContinents] = useState(() => new Set())
   const [error, setError] = useState('')
@@ -260,26 +255,17 @@ export default function Atlas({ appId, token }) {
   }, [loading, visitedDoc.status, wishlistDoc.status, countries.length, visited.size, wishlist.size])
 
   // ----- derived list (ordered, then narrowed) --------------------------
-  // Ordering never depends on marking. The optional continent order groups
-  // regions while keeping country names alphabetical inside each group.
+  // Ordering never depends on marking; the list stays alphabetical while the
+  // continent cards narrow it to the regions the owner wants to see.
   const filteredCountries = useMemo(() => {
-    const ordered = orderCountriesForList(countries, query, countrySort)
+    const ordered = orderCountriesForList(countries, query)
     const byStatus = filterCountriesByStatus(ordered, statusFilter, visited, wishlist)
     return filterCountriesByContinents(byStatus, selectedContinents)
-  }, [countries, query, countrySort, statusFilter, visited, wishlist, selectedContinents])
+  }, [countries, query, statusFilter, visited, wishlist, selectedContinents])
 
   const continentStats = useMemo(
     () => continentVisitStats(countries, visited),
     [countries, visited],
-  )
-
-  const changeCountrySort = useCallback(
-    (next) => {
-      if (!COUNTRY_SORTS.includes(next)) return
-      setCountrySort(next)
-      prefWrite(appId, 'country-sort', next)
-    },
-    [appId],
   )
 
   const toggleContinent = useCallback((continent) => {
@@ -298,11 +284,11 @@ export default function Atlas({ appId, token }) {
       prefWrite(appId, 'status-filter', next)
       // filter_changed (Reflection) — result_count is the size of the list the
       // new filter yields, so an unused or always-zero-result filter is visible.
-      const ordered = orderCountriesForList(countries, query, countrySort)
+      const ordered = orderCountriesForList(countries, query)
       const resultCount = filterCountriesByStatus(ordered, next, visited, wishlist).length
       emitSignal('filter_changed', { filter: next, result_count: resultCount })
     },
-    [appId, countries, query, countrySort, visited, wishlist],
+    [appId, countries, query, visited, wishlist],
   )
 
   // Surface a durable-write failure. doc.lastError is shared by reads AND
@@ -706,13 +692,11 @@ export default function Atlas({ appId, token }) {
           selectedCountry={selectedCountry}
           query={query}
           statusFilter={statusFilter}
-          countrySort={countrySort}
           continentStats={continentStats}
           selectedContinents={selectedContinents}
           loading={loading}
           onQueryChange={setQuery}
           onFilterChange={changeStatusFilter}
-          onSortChange={changeCountrySort}
           onToggleContinent={toggleContinent}
           onSelect={selectCountry}
           onToggleVisited={toggleVisited}

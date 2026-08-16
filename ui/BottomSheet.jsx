@@ -71,13 +71,11 @@ export function BottomSheet({
   selectedCountry,
   query,
   statusFilter,
-  countrySort,
   continentStats,
   selectedContinents,
   loading,
   onQueryChange,
   onFilterChange,
-  onSortChange,
   onToggleContinent,
   onSelect,
   onToggleVisited,
@@ -432,23 +430,6 @@ export function BottomSheet({
           </div>
         </div>
 
-        <div className="cb-list-tools">
-          <div className="cb-sort" role="group" aria-label="Sort countries">
-            <button
-              type="button"
-              className={countrySort === 'alphabetical' ? 'is-on' : ''}
-              aria-pressed={countrySort === 'alphabetical'}
-              onClick={() => onSortChange('alphabetical')}
-            >A–Z</button>
-            <button
-              type="button"
-              className={countrySort === 'continent' ? 'is-on' : ''}
-              aria-pressed={countrySort === 'continent'}
-              onClick={() => onSortChange('continent')}
-            >Continents</button>
-          </div>
-        </div>
-
         <div className="cb-continent-stats" role="group" aria-label="Filter by continent">
           {continentStats.map((stat) => (
             <button
@@ -515,20 +496,11 @@ export function BottomSheet({
               </div>
             )
           ) : (
-            countries.map((country, index) => {
+            countries.map((country) => {
               const isVisited = visited.has(country.iso3)
               const isWishlisted = wishlist.has(country.iso3)
-              const showContinentHead = countrySort === 'continent' &&
-                (index === 0 || countries[index - 1]?.region !== country.region)
-              const continent = continentStats.find((stat) => stat.name === country.region)
               return (
                 <div className="cb-country-block" key={country.iso3}>
-                  {showContinentHead ? (
-                    <div className="cb-continent-head">
-                      <strong>{country.region || 'Other'}</strong>
-                      <span>{continent?.visited || 0} of {continent?.total || 0} visited</span>
-                    </div>
-                  ) : null}
                   <div className={
                       'cb-row' +
                       (isVisited ? ' cb-row--visited' : '') +
