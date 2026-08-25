@@ -616,7 +616,7 @@ export default function Atlas({ appId, token }) {
             alt=""
             width={34}
             height={34}
-            className="cb-brand-icon" ref={(el) => el && window.mobius.immersive && window.mobius.immersive.holdToToggle(el)}
+            className="cb-brand-icon"
             onError={(e) => {
               e.currentTarget.style.display = 'none'
               const f = e.currentTarget.nextElementSibling
