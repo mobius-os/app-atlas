@@ -22,6 +22,8 @@ import {
   EMPTY_CODES,
   codeIdentity,
   makeStorage,
+  codeSetConflictContext,
+  installCodeSetConflictRecovery,
   useDocument,
 } from './storage.js'
 import {
@@ -91,9 +93,10 @@ export default function Atlas({ appId, token }) {
 
   // The codes persist through useDocument — ONE document per code-file, the
   // existing storage layout (visited.json / wishlist.json as arrays of ISO-3).
-  // mode:'lww' because every toggle is idempotent set membership; mergeCodeSets
-  // makes cross-context convergence a UNION (no add ever lost) while still
-  // honoring this context's removals. identity = the bare code, so a code is
+  // CAS queues the cached server version with every offline write. If reconnect
+  // finds a newer remote document, an app-owned add/remove intent replays over
+  // it instead of replacing it. mergeCodeSets also preserves already-observed
+  // sibling changes. identity = the bare code, so a code is
   // never re-minted or reordered. This single hook replaces the whole former
   // distrust subsystem: the localStorage codes cache, the persisted unsynced
   // flag, the serialized save-chain + backoff retry, and the boot read-union —
@@ -104,7 +107,8 @@ export default function Atlas({ appId, token }) {
       initial: EMPTY_CODES,
       identity: codeIdentity,
       merge: mergeCodeSets,
-      mode: 'lww',
+      mode: 'cas',
+      conflictContext: codeSetConflictContext,
       appId,
       token,
     }),
@@ -112,6 +116,7 @@ export default function Atlas({ appId, token }) {
   )
   const visitedDoc = useDocument('visited.json', docOpts)
   const wishlistDoc = useDocument('wishlist.json', docOpts)
+  useEffect(() => installCodeSetConflictRecovery(), [])
   // Render needs Sets (Globe / BottomSheet call .has / .size). Derive them from
   // the docs' optimistic values; visited wins over wishlist for any code that
   // a UNION-converged write left in both (the same exclusivity the toggles
