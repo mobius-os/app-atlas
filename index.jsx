@@ -107,8 +107,9 @@ export default function Atlas({ appId, token }) {
       initial: EMPTY_CODES,
       identity: codeIdentity,
       merge: mergeCodeSets,
-      mode: 'cas',
-      conflictContext: codeSetConflictContext,
+      ...(window.mobius?.runtimeFeatures?.authoritativeVersionedReads === true
+        ? { mode: 'cas', conflictContext: codeSetConflictContext }
+        : {}),
       appId,
       token,
     }),

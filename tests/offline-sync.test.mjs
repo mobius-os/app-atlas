@@ -7,6 +7,18 @@ import {
   installCodeSetConflictRecovery,
 } from '../sync.js'
 
+test('older runtimes do not install Atlas conditional conflict recovery', () => {
+  let installed = false
+  const storage = {
+    onConflict() { installed = true; return () => {} },
+    async getWithVersion() {},
+    async durableWrite() {},
+  }
+  const detach = installCodeSetConflictRecovery(storage, {})
+  assert.equal(installed, false)
+  assert.equal(typeof detach, 'function')
+})
+
 test('an offline Atlas add is replayed over a disjoint remote add', async () => {
   const context = codeSetConflictContext({ base: [], mine: ['BIH'] })
   let listener
@@ -19,7 +31,7 @@ test('an offline Atlas add is replayed over a disjoint remote add', async () => 
       return { durability: 'synced' }
     },
   }
-  const detach = installCodeSetConflictRecovery(storage)
+  const detach = installCodeSetConflictRecovery(storage, { authoritativeVersionedReads: true })
   assert.equal(await listener({
     path: 'visited.json',
     conflictContext: context,
@@ -39,12 +51,41 @@ test('Atlas leaves a queued conflict recovery unacknowledged', async () => {
     async getWithVersion() { return { value: ['FRA'], version: 'remote-v2' } },
     async durableWrite() { return { durability: 'queued' } },
   }
-  installCodeSetConflictRecovery(storage)
+  installCodeSetConflictRecovery(storage, { authoritativeVersionedReads: true })
   assert.equal(await listener({
     path: 'visited.json',
     conflictContext: context,
     refusedValue: ['BIH'],
   }), false)
+})
+
+test('Atlas replay merges from the authoritative server while a replacement is queued', async () => {
+  const context = codeSetConflictContext({ base: [], mine: ['BIH'] })
+  const reads = [
+    { value: ['FRA'], version: 'remote-v2' },
+    { value: ['DEU', 'FRA'], version: 'remote-v3' },
+  ]
+  let listener
+  const writes = []
+  const storage = {
+    onConflict(cb) { listener = cb; return () => {} },
+    async getWithVersion() { return reads.shift() },
+    async durableWrite(path, value, options) {
+      writes.push({ path, value, options })
+      return { durability: writes.length === 1 ? 'queued' : 'synced' }
+    },
+  }
+  installCodeSetConflictRecovery(storage, { authoritativeVersionedReads: true })
+  const conflict = {
+    path: 'visited.json',
+    conflictContext: context,
+    refusedValue: ['BIH'],
+  }
+
+  assert.equal(await listener(conflict), false)
+  assert.equal(await listener(conflict), true)
+  assert.deepEqual(writes[1].value, ['BIH', 'DEU', 'FRA'])
+  assert.equal(writes[1].options.ifMatch, 'remote-v3')
 })
 
 test('Atlas conflict intents preserve removals while retaining unrelated remote membership', () => {
@@ -72,7 +113,7 @@ test('Atlas replays an ordered offline intent batch, including a reversal', asyn
       return { durability: 'synced' }
     },
   }
-  installCodeSetConflictRecovery(storage)
+  installCodeSetConflictRecovery(storage, { authoritativeVersionedReads: true })
   assert.equal(await listener({
     path: 'visited.json',
     conflictContext: context,

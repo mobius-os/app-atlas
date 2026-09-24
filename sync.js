@@ -23,8 +23,12 @@ export function applyCodeSetIntent(current, context) {
   return [...next].sort()
 }
 
-export function installCodeSetConflictRecovery(storage = window.mobius?.storage) {
-  if (!storage?.onConflict || !storage?.getWithVersion || !storage?.durableWrite) return () => {}
+export function installCodeSetConflictRecovery(
+  storage = window.mobius?.storage,
+  runtimeFeatures = typeof window !== 'undefined' ? window.mobius?.runtimeFeatures : null,
+) {
+  if (runtimeFeatures?.authoritativeVersionedReads !== true
+      || !storage?.onConflict || !storage?.getWithVersion || !storage?.durableWrite) return () => {}
   return storage.onConflict(async (conflict) => {
     const context = conflict?.conflictContext
     const intents = conflictContexts(context)
@@ -33,6 +37,7 @@ export function installCodeSetConflictRecovery(storage = window.mobius?.storage)
         || intents.some((intent) => intent?.kind !== 'atlas-code-set')) return false
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const current = await storage.getWithVersion(conflict.path, 'json')
+      if (current?.offline === true) return false
       const merged = intents.reduce(applyCodeSetIntent, current?.value)
       try {
         const result = await storage.durableWrite(conflict.path, merged, {
