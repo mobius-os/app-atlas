@@ -31,6 +31,22 @@ test('an offline Atlas add is replayed over a disjoint remote add', async () => 
   detach()
 })
 
+test('Atlas leaves a queued conflict recovery unacknowledged', async () => {
+  const context = codeSetConflictContext({ base: [], mine: ['BIH'] })
+  let listener
+  const storage = {
+    onConflict(cb) { listener = cb; return () => { listener = null } },
+    async getWithVersion() { return { value: ['FRA'], version: 'remote-v2' } },
+    async durableWrite() { return { durability: 'queued' } },
+  }
+  installCodeSetConflictRecovery(storage)
+  assert.equal(await listener({
+    path: 'visited.json',
+    conflictContext: context,
+    refusedValue: ['BIH'],
+  }), false)
+})
+
 test('Atlas conflict intents preserve removals while retaining unrelated remote membership', () => {
   const context = codeSetConflictContext({ base: ['BIH', 'DEU'], mine: ['DEU'] })
   assert.deepEqual(applyCodeSetIntent(['BIH', 'DEU', 'FRA'], context), ['DEU', 'FRA'])

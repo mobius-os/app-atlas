@@ -35,12 +35,12 @@ export function installCodeSetConflictRecovery(storage = window.mobius?.storage)
       const current = await storage.getWithVersion(conflict.path, 'json')
       const merged = intents.reduce(applyCodeSetIntent, current?.value)
       try {
-        await storage.durableWrite(conflict.path, merged, {
+        const result = await storage.durableWrite(conflict.path, merged, {
           kind: 'json',
           ...(current?.version ? { ifMatch: current.version } : { ifNoneMatch: true }),
           conflictContext: context,
         })
-        return true
+        return result?.durability === 'synced'
       } catch (error) {
         if (error?.code !== 'conflict') throw error
       }
