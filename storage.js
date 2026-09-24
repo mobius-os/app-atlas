@@ -1,5 +1,5 @@
 import React from 'react'
-export { codeSetConflictContext, applyCodeSetIntent, installCodeSetConflictRecovery } from './sync.js'
+export { codeSetConflictContext, codeSetPersistenceOptions, applyCodeSetIntent, installCodeSetConflictRecovery } from './sync.js'
 
 // --------------------------------------------------------------------------
 // Read-only storage shim for the static world geometry.
