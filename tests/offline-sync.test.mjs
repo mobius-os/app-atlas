@@ -4,8 +4,13 @@ import test from 'node:test'
 import {
   applyCodeSetIntent,
   codeSetConflictContext,
+  codeSetPersistenceOptions,
   installCodeSetConflictRecovery,
 } from '../sync.js'
+
+test('older runtimes keep Atlas document writes in LWW mode', () => {
+  assert.deepEqual(codeSetPersistenceOptions({}), { mode: 'lww' })
+})
 
 test('older runtimes do not install Atlas conditional conflict recovery', () => {
   let installed = false

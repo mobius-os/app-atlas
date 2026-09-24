@@ -23,6 +23,12 @@ export function applyCodeSetIntent(current, context) {
   return [...next].sort()
 }
 
+export function codeSetPersistenceOptions(runtimeFeatures) {
+  return runtimeFeatures?.authoritativeVersionedReads === true
+    ? { mode: 'cas', conflictContext: codeSetConflictContext }
+    : { mode: 'lww' }
+}
+
 export function installCodeSetConflictRecovery(
   storage = window.mobius?.storage,
   runtimeFeatures = typeof window !== 'undefined' ? window.mobius?.runtimeFeatures : null,

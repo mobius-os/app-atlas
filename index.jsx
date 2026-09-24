@@ -22,7 +22,7 @@ import {
   EMPTY_CODES,
   codeIdentity,
   makeStorage,
-  codeSetConflictContext,
+  codeSetPersistenceOptions,
   installCodeSetConflictRecovery,
   useDocument,
 } from './storage.js'
@@ -107,9 +107,7 @@ export default function Atlas({ appId, token }) {
       initial: EMPTY_CODES,
       identity: codeIdentity,
       merge: mergeCodeSets,
-      ...(window.mobius?.runtimeFeatures?.authoritativeVersionedReads === true
-        ? { mode: 'cas', conflictContext: codeSetConflictContext }
-        : {}),
+      ...codeSetPersistenceOptions(window.mobius?.runtimeFeatures),
       appId,
       token,
     }),
