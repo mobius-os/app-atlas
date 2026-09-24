@@ -2,9 +2,10 @@
 //
 // These exercise Atlas's EXACT persistence configuration — one document per
 // code-file (visited.json / wishlist.json as ISO-3 arrays), identity = the bare
-// code, merge = mergeCodeSets, mode:'lww' — against the REAL Möbius runtime
-// (frontend/public/mobius-runtime.js → createUseDocument + makeStorage) running
-// on fake-indexeddb with a controlled fetch. They assert the four properties
+// code, merge = mergeCodeSets, mode:'cas'. The vendored hook model below covers
+// ordinary durability behavior; offline reconnect conflict recovery is tested
+// separately in offline-sync.test.mjs against Atlas's app-owned intent handler.
+// They assert the four properties
 // the migration must hold:
 //   (a) adding a code persists through the hook (durable write reaches the
 //       server, optimistic value is read-your-writes);
@@ -31,6 +32,7 @@ import assert from 'node:assert/strict'
 import { freshEnv, waitFor } from './_runtime-harness.mjs'
 import { createUseDocument, makeStorage, DurableWriteError } from './_runtime-harness.mjs'
 import { mergeCodeSets } from '../domain.js'
+import { codeSetConflictContext } from '../sync.js'
 
 // Atlas's document options (mirrors the Atlas component's docOpts).
 const codeIdentity = (code) => String(code)
@@ -38,7 +40,8 @@ const atlasDocOpts = () => ({
   initial: [],
   identity: codeIdentity,
   merge: mergeCodeSets,
-  mode: 'lww',
+  mode: 'cas',
+  conflictContext: codeSetConflictContext,
 })
 
 // A re-rendering React-hooks driver. Persists hook slots across renders so the
