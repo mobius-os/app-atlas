@@ -19,11 +19,11 @@ export const CSS = `
     fill: var(--cb-land-hover);
   }
   .cb-row:hover {
-    background: color-mix(in srgb, var(--surface2, var(--surface)) 80%, transparent);
+    background: color-mix(in srgb, var(--surface-2, var(--surface)) 80%, transparent);
   }
   .cb-sheet-search-clear:hover { color: var(--text); }
   .cb-detail-close:hover {
-    background: var(--surface2, var(--surface));
+    background: var(--surface-2, var(--surface));
     color: var(--text);
   }
 }
@@ -48,10 +48,10 @@ export const CSS = `
   --cb-ocean-3: color-mix(in srgb, #082a5d 92%, var(--bg) 8%);
   /* /mobius-ui:identity-palette */
   --cb-surface: color-mix(in srgb, var(--surface) 82%, transparent);
-  /* --surface2 isn't guaranteed by every Möbius theme; fall back
+  /* --surface-2 isn't guaranteed by every Möbius theme; fall back
      to --surface so the sheet stays solid on themes that don't
      define the deeper surface token. */
-  --cb-surface-strong: color-mix(in srgb, var(--surface2, var(--surface)) 92%, transparent);
+  --cb-surface-strong: color-mix(in srgb, var(--surface-2, var(--surface)) 92%, transparent);
   --cb-border: var(--border);
   /* SVG country paths now sit above the photographic world. A virtually clear
      base fill preserves whole-country hit targets without repainting the land;
@@ -705,7 +705,7 @@ export const CSS = `
   border-bottom: 1px solid color-mix(in srgb, var(--cb-border) 54%, transparent);
   background: linear-gradient(
     180deg,
-    color-mix(in srgb, var(--surface2, var(--surface)) 34%, transparent),
+    color-mix(in srgb, var(--surface-2, var(--surface)) 34%, transparent),
     transparent
   );
 }
@@ -775,7 +775,7 @@ export const CSS = `
   border-radius: 10px;
   background:
     linear-gradient(145deg,
-      color-mix(in srgb, var(--surface2, var(--surface)) 64%, transparent),
+      color-mix(in srgb, var(--surface-2, var(--surface)) 64%, transparent),
       color-mix(in srgb, var(--surface) 42%, transparent));
   box-shadow: inset 0 1px 0 color-mix(in srgb, #ffffff 5%, transparent);
 }
@@ -830,7 +830,7 @@ export const CSS = `
   place-items: center;
   padding: 0;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--surface2, var(--surface)) 80%, transparent);
+  background: color-mix(in srgb, var(--surface-2, var(--surface)) 80%, transparent);
   color: var(--muted);
   border: 1px solid var(--cb-border);
   cursor: pointer;
@@ -847,7 +847,7 @@ export const CSS = `
   font-size: 14px;
   font-weight: 600;
   letter-spacing: 0;
-  background: color-mix(in srgb, var(--surface2, var(--surface)) 88%, transparent);
+  background: color-mix(in srgb, var(--surface-2, var(--surface)) 88%, transparent);
   color: var(--text);
   border: 1px solid var(--cb-border);
   cursor: pointer;
