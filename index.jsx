@@ -42,6 +42,7 @@ import {
   toggleCountryStatus,
 } from './domain.js'
 import { Globe } from './ui/Globe.jsx'
+import { earthTextureForThisDevice } from './earthTexture.js'
 import { BottomSheet } from './ui/BottomSheet.jsx'
 import { SyncPill } from './ui/SyncPill.jsx'
 import { CSS } from './theme.js'
@@ -88,6 +89,10 @@ export {
 
 export default function Atlas({ appId, token }) {
   const storage = useMemo(() => makeStorage({ appId, token }), [appId, token])
+  const loadEarthTexture = useCallback(
+    () => storage.getBlob(earthTextureForThisDevice()),
+    [storage],
+  )
 
   const [countries, setCountries] = useState([])
 
@@ -685,6 +690,7 @@ export default function Atlas({ appId, token }) {
               onTapOcean={deselect}
               onGeometryRepaired={reportGeometryRepair}
               onInteract={reportGlobeInteract}
+              loadEarthTexture={loadEarthTexture}
             />
           )}
         </div>

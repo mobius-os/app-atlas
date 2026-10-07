@@ -19,7 +19,6 @@ import {
   shortestLngDelta,
   solveVersorDrag,
 } from '../domain.js'
-import { BLUE_MARBLE_TEXTURE } from '../earthTexture.js'
 import { createEarthRenderer } from './earthRenderer.js'
 
 const TAP_MOVE_PX = 6
@@ -43,9 +42,15 @@ export function Globe({
   onTapOcean,
   onGeometryRepaired,
   onInteract,
+  // () => Promise<Blob|null>: the Earth texture for this device.
+  loadEarthTexture,
 }) {
   const containerRef = useRef(null)
   const earthCanvasRef = useRef(null)
+  // Read at load time so a new callback identity (for example a refreshed
+  // token) does not tear down and reload a texture that is already painted.
+  const loadEarthTextureRef = useRef(loadEarthTexture)
+  loadEarthTextureRef.current = loadEarthTexture
   const earthRendererRef = useRef(null)
   const sphereRef = useRef(null)
   const countryPathRefs = useRef(new Map())
@@ -215,7 +220,7 @@ export function Globe({
     return () => window.removeEventListener('online', retry)
   }, [])
 
-  // Decode the bundled NASA texture and hand it to the canvas renderer. The
+  // Load and decode the NASA texture and hand it to the canvas renderer. The
   // renderer never owns interaction or geometry — it only paints real-world
   // geography below the SVG. Context loss returns to the old SVG fallback and
   // retries cleanly when the browser restores the canvas.
@@ -257,11 +262,21 @@ export function Globe({
       setEarthRendererReady(false)
       setEarthPainted(false)
     }
-    image.src = BLUE_MARBLE_TEXTURE
+    let objectUrl = null
+    Promise.resolve(loadEarthTextureRef.current?.()).catch(() => null).then((blob) => {
+      if (!active) return
+      if (!blob) {
+        image.onerror()
+        return
+      }
+      objectUrl = URL.createObjectURL(blob)
+      image.src = objectUrl
+    })
     return () => {
       active = false
       image.onload = null
       image.onerror = null
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
       canvas.removeEventListener('webglcontextlost', onContextLost)
       canvas.removeEventListener('webglcontextrestored', onContextRestored)
       renderer?.destroy?.()
