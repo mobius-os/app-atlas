@@ -31,3 +31,41 @@ export function earthTextureForThisDevice() {
     viewportMin: Math.min(window.innerWidth || 0, window.innerHeight || 0) || Infinity,
   })
 }
+
+// Loads the texture once. When it is unavailable (a first open offline, before
+// the runtime has mirrored the seed), it tries again each time the browser
+// comes back online, until one load succeeds. A texture that loaded is never
+// fetched again. Returns a function that cancels any further delivery.
+export function watchEarthTexture(load, onTexture, {
+  onMissing = () => {},
+  target = typeof window === 'undefined' ? null : window,
+} = {}) {
+  let active = true
+  let loading = false
+  let retryWhenSettled = false
+  const stop = () => {
+    active = false
+    target?.removeEventListener?.('online', attempt)
+  }
+  async function attempt() {
+    if (loading) {
+      retryWhenSettled = true
+      return
+    }
+    loading = true
+    retryWhenSettled = false
+    const blob = await new Promise((resolve) => resolve(load())).catch(() => null)
+    loading = false
+    if (!active) return
+    if (blob) {
+      stop()
+      onTexture(blob)
+      return
+    }
+    onMissing()
+    if (retryWhenSettled) attempt()
+  }
+  target?.addEventListener?.('online', attempt)
+  attempt()
+  return stop
+}

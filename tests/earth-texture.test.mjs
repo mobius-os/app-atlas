@@ -96,3 +96,64 @@ test('motion defers country paths only when the canvas can preserve their outlin
   assert.match(renderer, /setCountryOutlines\(geometries\)/)
   assert.match(renderer, /u_outline_strength/)
 })
+
+const settle = () => new Promise((resolve) => setImmediate(resolve))
+
+test('a texture that failed to load offline is loaded again when the browser reconnects', async () => {
+  const { watchEarthTexture } = await import(new URL('earthTexture.js', root))
+  const target = new EventTarget()
+  const texture = { kind: 'blob' }
+  const results = [null, texture]
+  let loads = 0
+  let missing = 0
+  const delivered = []
+  watchEarthTexture(async () => results[loads++], (blob) => delivered.push(blob), {
+    target,
+    onMissing: () => { missing += 1 },
+  })
+  await settle()
+  assert.equal(missing, 1)
+  assert.deepEqual(delivered, [])
+
+  target.dispatchEvent(new Event('online'))
+  await settle()
+  assert.deepEqual(delivered, [texture])
+
+  target.dispatchEvent(new Event('online'))
+  await settle()
+  assert.equal(loads, 2, 'a texture that loaded is never fetched again')
+})
+
+test('a reconnect during a pending load retries once that load fails', async () => {
+  const { watchEarthTexture } = await import(new URL('earthTexture.js', root))
+  const target = new EventTarget()
+  let finishFirst
+  const loads = [new Promise((resolve) => { finishFirst = resolve }), Promise.resolve({ kind: 'blob' })]
+  let calls = 0
+  const delivered = []
+  watchEarthTexture(() => loads[calls++], (blob) => delivered.push(blob), { target })
+  target.dispatchEvent(new Event('online'))
+  assert.equal(calls, 1, 'overlapping loads are not started')
+  finishFirst(null)
+  await settle()
+  assert.equal(calls, 2)
+  assert.equal(delivered.length, 1)
+})
+
+test('a cancelled texture watch delivers nothing and stops listening', async () => {
+  const { watchEarthTexture } = await import(new URL('earthTexture.js', root))
+  const target = new EventTarget()
+  let calls = 0
+  const delivered = []
+  const stop = watchEarthTexture(async () => { calls += 1; return calls > 1 ? {} : null }, (blob) => delivered.push(blob), { target })
+  stop()
+  await settle()
+  target.dispatchEvent(new Event('online'))
+  await settle()
+  assert.equal(calls, 1)
+  assert.deepEqual(delivered, [])
+})
+
+test('the globe loads its texture through the reconnect-aware watcher', () => {
+  assert.match(read('ui/Globe.jsx'), /watchEarthTexture\(/)
+})

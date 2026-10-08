@@ -19,6 +19,7 @@ import {
   shortestLngDelta,
   solveVersorDrag,
 } from '../domain.js'
+import { watchEarthTexture } from '../earthTexture.js'
 import { createEarthRenderer } from './earthRenderer.js'
 
 const TAP_MOVE_PX = 6
@@ -263,17 +264,17 @@ export function Globe({
       setEarthPainted(false)
     }
     let objectUrl = null
-    Promise.resolve(loadEarthTextureRef.current?.()).catch(() => null).then((blob) => {
-      if (!active) return
-      if (!blob) {
-        image.onerror()
-        return
-      }
-      objectUrl = URL.createObjectURL(blob)
-      image.src = objectUrl
-    })
+    const stopTexture = watchEarthTexture(
+      () => loadEarthTextureRef.current?.(),
+      (blob) => {
+        objectUrl = URL.createObjectURL(blob)
+        image.src = objectUrl
+      },
+      { onMissing: () => image.onerror() },
+    )
     return () => {
       active = false
+      stopTexture()
       image.onload = null
       image.onerror = null
       if (objectUrl) URL.revokeObjectURL(objectUrl)
