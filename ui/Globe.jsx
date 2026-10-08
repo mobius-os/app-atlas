@@ -223,12 +223,21 @@ export function Globe({
   // Load and decode the NASA texture and hand it to the canvas renderer. The
   // renderer never owns interaction or geometry — it only paints real-world
   // geography below the SVG. Context loss returns to the old SVG fallback and
-  // retries cleanly when the browser restores the canvas.
+  // retries cleanly when the browser restores the canvas. A failed storage
+  // read or decode retries online, but a successful renderer is left alone.
   useEffect(() => {
     const canvas = earthCanvasRef.current
     if (!canvas || typeof Image === 'undefined') return undefined
     let active = true
     let renderer = null
+    let textureFailed = false
+    const retryTexture = () => {
+      if (!active || !textureFailed) return
+      // Claim the retry before React commits, so an online burst owns one read.
+      textureFailed = false
+      setEarthAttempt((value) => value + 1)
+    }
+    if (typeof window !== 'undefined') window.addEventListener('online', retryTexture)
     setEarthRendererReady(false)
     setEarthOutlinesReady(false)
     const image = new Image()
@@ -258,12 +267,13 @@ export function Globe({
     }
     image.onerror = () => {
       if (!active) return
+      textureFailed = true
       earthRendererRef.current = null
       setEarthRendererReady(false)
       setEarthPainted(false)
     }
     let objectUrl = null
-    Promise.resolve(loadEarthTextureRef.current?.()).catch(() => null).then((blob) => {
+    Promise.resolve().then(() => active ? loadEarthTextureRef.current?.() : null).catch(() => null).then((blob) => {
       if (!active) return
       if (!blob) {
         image.onerror()
@@ -276,6 +286,7 @@ export function Globe({
       active = false
       image.onload = null
       image.onerror = null
+      if (typeof window !== 'undefined') window.removeEventListener('online', retryTexture)
       if (objectUrl) URL.revokeObjectURL(objectUrl)
       canvas.removeEventListener('webglcontextlost', onContextLost)
       canvas.removeEventListener('webglcontextrestored', onContextRestored)
