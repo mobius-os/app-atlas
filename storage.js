@@ -43,13 +43,34 @@ export function makeStorage({ appId, token }) {
     }
   }
 
+  // Binary seeds (the Earth texture). The runtime path goes through the shell
+  // bridge and its offline mirror; the direct fetch is the no-runtime path.
+  // Resolves null when the file is unavailable so the globe keeps its SVG
+  // fallback.
+  async function getBlob(path) {
+    const native = probe()
+    if (native && typeof native.getBlob === 'function') {
+      try {
+        return await native.getBlob(path)
+      } catch {
+        // fall through to fetch
+      }
+    }
+    try {
+      const r = await fetch(`${base}/${path}`, { headers: auth })
+      return r.ok ? await r.blob() : null
+    } catch {
+      return null
+    }
+  }
+
   // hasRuntime is a *probe*, not a cached boolean — readers call it when
   // they need a fresh answer (the SyncPill uses it on every render).
   function hasRuntime() {
     return !!probe()
   }
 
-  return { get, hasRuntime }
+  return { get, getBlob, hasRuntime }
 }
 
 // Bind the document hook ONCE at module top to the React this app already

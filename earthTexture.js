@@ -1,12 +1,71 @@
-import { EARTH_TEXTURE_DATA_A } from './earthTextureDataA.js'
-import { EARTH_TEXTURE_DATA_B } from './earthTextureDataB.js'
-
 // NASA Blue Marble: Next Generation, October 2004, with topography and
 // bathymetry. October is the closest match to the artifact reference's snow
 // line, vegetation, land tones, and Atlantic seabed detail. The 5400×2700 NASA
-// mosaic is encoded at 4096×2048/WebP q90 for a crisp offline globe. Its data
-// URL is split across two modules only because Atlas's install validator caps
-// each individual source file at 1 MiB; the browser still decodes one image.
+// mosaic is encoded at 4096×2048/WebP q90 for a crisp globe, plus a 2048×1024
+// variant for phones, where the full texture would cost about 32 MB of GPU
+// memory once decoded.
 // Source: https://science.nasa.gov/earth/earth-observatory/blue-marble-next-generation/base-topography-bathymetry/
-export const BLUE_MARBLE_TEXTURE =
-  `data:image/webp;base64,${EARTH_TEXTURE_DATA_A}${EARTH_TEXTURE_DATA_B}`
+//
+// Both files ship as storage seeds (mobius.json), like countries.geo.json, so
+// they stay out of the JS bundle: the compiled module no longer carries a
+// 1.4 MB data URL on every cold open, and the runtime's offline mirror keeps
+// the texture available offline after its first read. Seeded names are
+// versioned because an app update only adds seed keys that do not exist yet;
+// a new texture must use a new name.
+export const EARTH_TEXTURES = {
+  full: 'textures/blue-marble-2004-10-4096.webp',
+  phone: 'textures/blue-marble-2004-10-2048.webp',
+}
+
+// A phone-sized touch screen gets the 2048-wide texture; the globe there is
+// at most about a thousand device pixels across. Anything else gets the full
+// texture.
+export function chooseEarthTexture({ coarsePointer, viewportMin }) {
+  return coarsePointer && viewportMin < 600 ? EARTH_TEXTURES.phone : EARTH_TEXTURES.full
+}
+
+export function earthTextureForThisDevice() {
+  if (typeof window === 'undefined') return EARTH_TEXTURES.full
+  return chooseEarthTexture({
+    coarsePointer: Boolean(window.matchMedia?.('(pointer: coarse)')?.matches),
+    viewportMin: Math.min(window.innerWidth || 0, window.innerHeight || 0) || Infinity,
+  })
+}
+
+// Loads the texture once. When it is unavailable (a first open offline, before
+// the runtime has mirrored the seed), it tries again each time the browser
+// comes back online, until one load succeeds. A texture that loaded is never
+// fetched again. Returns a function that cancels any further delivery.
+export function watchEarthTexture(load, onTexture, {
+  onMissing = () => {},
+  target = typeof window === 'undefined' ? null : window,
+} = {}) {
+  let active = true
+  let loading = false
+  let retryWhenSettled = false
+  const stop = () => {
+    active = false
+    target?.removeEventListener?.('online', attempt)
+  }
+  async function attempt() {
+    if (loading) {
+      retryWhenSettled = true
+      return
+    }
+    loading = true
+    retryWhenSettled = false
+    const blob = await new Promise((resolve) => resolve(load())).catch(() => null)
+    loading = false
+    if (!active) return
+    if (blob) {
+      stop()
+      onTexture(blob)
+      return
+    }
+    onMissing()
+    if (retryWhenSettled) attempt()
+  }
+  target?.addEventListener?.('online', attempt)
+  attempt()
+  return stop
+}
